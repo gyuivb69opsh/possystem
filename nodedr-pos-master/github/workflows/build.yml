@@ -1,0 +1,125 @@
+name: Build Windows EXE
+
+# Runs on every push to main/master (and manually from the Actions tab).
+# Result: an "Cafe-POS-Installer" artifact on the run summary page with a
+# download button (contains Cafe-POS-Setup.exe + its SHA256 checksum).
+#
+# Safety:
+#  - read-only token (contents: read) - the workflow cannot modify the repo
+#  - uses NO secrets, never publishes anything, never uploads outside GitHub
+#  - only push / manual triggers (no pull_request_target, so forks can't run it with your token)
+#  - installs from lockfiles (npm ci) so dependency versions are exactly the committed ones
+#  - the built installer needs no admin rights and does NOT ship any database or JWT secret
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # ---------- backend ----------
+      - name: Backend - install, generate Prisma client
+        working-directory: backend
+        env:
+          DATABASE_URL: file:./data/build.db
+        run: |
+          npm ci
+          npx prisma generate
+          node node_modules/prisma/build/index.js --version
+
+      # ---------- frontend ----------
+      - name: Frontend - install and build
+        working-directory: frontend
+        env:
+          # /api/* is proxied to the local backend that the installer starts
+          BACKEND_URL: http://127.0.0.1:4000
+        run: |
+          npm ci
+          npm run build
+          test -f .next/standalone/server.js
+
+      # ---------- stage the app folder ----------
+      - name: Stage app files
+        run: |
+          mkdir -p stage/node stage/backend stage/frontend
+          cp "$(cygpath -u "$(node -p 'process.execPath')")" stage/node/node.exe
+          cp -r backend/node_modules backend/prisma backend/src backend/package.json backend/prisma.config.js stage/backend/
+          cp -r frontend/.next/standalone/. stage/frontend/
+          mkdir -p stage/frontend/.next
+          cp -r frontend/.next/static stage/frontend/.next/static
+          cp -r frontend/public stage/frontend/public
+          cp packaging/windows/start-pos.cmd packaging/windows/stop-pos.cmd stage/
+          cp LICENSE stage/LICENSE.txt
+          test -f stage/frontend/server.js
+
+      # ---------- prove it actually starts before shipping ----------
+      - name: Smoke test (start backend + web UI)
+        run: |
+          cd stage/backend
+          export NODE_ENV=production DATABASE_URL="file:./data/pos.db"
+          mkdir -p data
+          ../node/node.exe node_modules/prisma/build/index.js migrate deploy
+          PORT=4000 ../node/node.exe src/server.js > ../backend.log 2>&1 &
+          BPID=$!
+          cd ../frontend
+          PORT=1994 HOSTNAME=127.0.0.1 ../node/node.exe server.js > ../frontend.log 2>&1 &
+          FPID=$!
+          curl -s -o /dev/null --retry 20 --retry-delay 2 --retry-connrefused http://127.0.0.1:4000/
+          curl -s -o /dev/null --retry 20 --retry-delay 2 --retry-connrefused http://127.0.0.1:1994/
+          echo "backend and frontend both answered"
+          # stop only the two test processes (not the runner's own node)
+          for pid in $BPID $FPID; do
+            taskkill //F //PID "$(cat /proc/$pid/winpid)" > /dev/null 2>&1 || true
+          done
+          sleep 2
+
+      - name: Remove test data (never ship a database or secret)
+        run: |
+          rm -rf stage/backend/data stage/backend.log stage/frontend.log
+          mkdir -p stage/backend/data
+
+      # ---------- build the installer .exe ----------
+      - name: Build installer with Inno Setup
+        shell: pwsh
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          & $iscc "/DAppVersion=1.0.$env:RUN_NUMBER" packaging\windows\installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
+          $hash = (Get-FileHash dist\Cafe-POS-Setup.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  Cafe-POS-Setup.exe" | Out-File -Encoding ascii dist\SHA256.txt
+          Write-Host "SHA256: $hash"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Cafe-POS-Installer
+          path: |
+            dist/Cafe-POS-Setup.exe
+            dist/SHA256.txt
+          if-no-files-found: error
+          retention-days: 30

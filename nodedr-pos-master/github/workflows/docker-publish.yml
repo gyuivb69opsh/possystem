@@ -1,0 +1,167 @@
+name: Publish Docker images
+
+# Builds and publishes the backend/frontend images that the Docker Compose
+# quick start AND the CasaOS/ZimaOS app store manifest (casaos/docker-compose.yml)
+# both pull as pre-built, version-pinned images from GHCR. CasaOS installs an
+# app straight from its compose file with no build step and no access to this
+# repo's source, so `build:` (used in the repo-root docker-compose.yml for a
+# `git clone` + build-from-source flow) is not an option there — the CasaOS
+# manifest instead references `ghcr.io/raktim94/nodedr-pos-{backend,frontend}:<version>`,
+# and those tags only exist because this workflow pushed them.
+#
+# Multi-arch (amd64 + arm64) on purpose: a real share of CasaOS/ZimaOS boxes
+# are ARM SBCs, and declaring `architectures: [amd64, arm64]` in the x-casaos
+# manifest without actually publishing an arm64 image would install a broken
+# app on that hardware.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "backend/**"
+      - "frontend/**"
+      - "updater/**"
+      - ".github/workflows/docker-publish.yml"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag to publish (e.g. 1.0.0). Also pushed as :latest."
+        required: false
+        default: ""
+
+concurrency:
+  group: docker-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      owner: ${{ steps.version.outputs.owner }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - name: Resolve version and image owner
+        id: version
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          VERSION="$INPUT_VERSION"
+          if [ -z "$VERSION" ]; then
+            # The app's own version (backend/package.json) is the single
+            # source of truth: it is what the in-app update check compares
+            # against, and the check only announces a version once an image
+            # tagged with it exists on GHCR.
+            VERSION="$(node -p "require('./backend/package.json').version")"
+          fi
+          if [ -z "$VERSION" ]; then
+            echo "::error::Resolved VERSION is empty - refusing to publish an untagged image" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # GHCR image paths must be lowercase; the GitHub org/user name
+          # (e.g. "Raktim94") is not guaranteed to be.
+          echo "owner=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+  # Each architecture builds on a NATIVE runner (ubuntu-24.04-arm for arm64) and the digests are merged into one
+  # multi-arch tag afterwards. Emulating arm64 under QEMU ran the Next.js build so slowly that the frontend job
+  # exceeded its time limit and the release was cancelled.
+  build:
+    needs: version
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [nodedr-pos-backend, nodedr-pos-frontend, nodedr-pos-updater]
+        platform: [linux/amd64, linux/arm64]
+        include:
+          - image: nodedr-pos-backend
+            context: ./backend
+          - image: nodedr-pos-frontend
+            context: ./frontend
+          - image: nodedr-pos-updater
+            context: ./updater
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            slug: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            slug: arm64
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: docker/setup-buildx-action@v4
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.context }}
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ needs.version.outputs.owner }}/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.slug }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}-${{ matrix.slug }}
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.image }}-${{ matrix.slug }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        image: [nodedr-pos-backend, nodedr-pos-frontend, nodedr-pos-updater]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-${{ matrix.image }}-*
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v4
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create multi-arch manifest
+        working-directory: /tmp/digests
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ needs.version.outputs.owner }}/${{ matrix.image }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          docker buildx imagetools create \
+            -t "$IMAGE:$VERSION" -t "$IMAGE:latest" \
+            $(printf "$IMAGE@sha256:%s " *)
+      - name: Inspect
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ needs.version.outputs.owner }}/${{ matrix.image }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: docker buildx imagetools inspect "$IMAGE:$VERSION"
