@@ -1,0 +1,1289 @@
+<p align="center">
+  <img src="docs/logo.png" alt="NodeDR POS logo" width="160">
+</p>
+
+# nodedr-pos
+
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
+[![Docker Compose](https://img.shields.io/badge/deploy-docker%20compose-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
+[![Node](https://img.shields.io/badge/node-24-339933?logo=node.js&logoColor=white)](backend/Dockerfile)
+[![Offline-first](https://img.shields.io/badge/offline--first-yes-success)](#)
+[![CasaOS / ZimaOS](https://img.shields.io/badge/CasaOS%20%2F%20ZimaOS-one--click%20app-1F6FEB)](casaos/README.md)
+
+**[Try NodeDR POS](https://pos.nodedr.com/)** · **[Case study](https://www.raktimranjit.com/projects/nodedr-pos)** · **[Maintainer: Raktim Ranjit](https://www.raktimranjit.com/)**
+
+<p align="center">
+  <img src="docs/assets/hero-animated.svg" alt="NodeDR POS: animated overview with an illustrative sample screen" width="100%">
+</p>
+
+
+A free, open-source, **offline-first** point-of-sale and inventory
+management system for small retail shops. It runs on a machine in your shop
+with Docker Compose, so normal checkout and inventory work without an internet
+connection or subscription. Your data stays on that machine by default.
+It's also just a portable two-container stack, so if you'd rather manage
+it remotely, the identical setup runs on any VPS/cloud provider too — see
+[Where to run it](#where-to-run-it) for the trade-offs either way.
+
+Built for a barcode-scanner counter setup: scan an item to sell it, press
+Enter to check out, then print or download the receipt with one click. No
+USB scanner handy? Scan barcodes and QR codes straight from a phone or
+tablet's camera instead. No barcode at all? Generate one and print a
+label, right from the app.
+
+Access it at **`http://<machine>:1994`** — from the shop's own machine or any
+tablet/phone on the same network.
+
+## Install
+
+<p align="center">
+  <img src="docs/assets/install-animated.svg" alt="Animated terminal: clone the repo and run install.sh" width="100%">
+</p>
+
+
+NodeDR POS is a web app that runs on **one machine in your shop** (the "till"
+or a small server). Every phone, tablet or PC on the same Wi-Fi then opens it in
+a browser at `http://<that-machine>:1994`. Pick the option that matches that
+machine:
+
+| I have… | Best option | Needs |
+| --- | --- | --- |
+| 🖥️ **Windows 10 or 11** | [**Microsoft Store app**](https://apps.microsoft.com/store/detail/9N4D0GW2XZ37?cid=DevShareMCLPCS) | nothing else |
+| 🐳 **Docker host, NAS or VPS** | [**One-command Docker Compose install**](#one-click-install) | Docker |
+| 🏠 **CasaOS / ZimaOS box** | [**CasaOS app**](casaos/README.md) | nothing else |
+
+These are the supported ways to install NodeDR POS. Standalone Windows, macOS,
+and Linux installer downloads are not distributed. Use Docker Compose on Mac
+or Linux.
+
+### One-command install (Windows, macOS, or Linux)
+
+Paste the command for your terminal. The quickstart checks requirements,
+installs Docker where supported if it is missing, then downloads and starts
+NodeDR POS. On first use, Windows may ask for one restart while it enables
+WSL2; run the same command again after restarting.
+
+**Windows PowerShell**
+
+```powershell
+irm https://raw.githubusercontent.com/Raktim94/nodedr-pos/master/scripts/quickstart.ps1 | iex
+```
+
+**macOS / Linux Terminal**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Raktim94/nodedr-pos/master/scripts/quickstart.sh | bash
+```
+
+When installation finishes, open <http://localhost:1994>. On another phone,
+tablet, or computer on the same Wi-Fi, open `http://<computer-ip>:1994` using
+the address of the machine running NodeDR POS. On Linux, the installer may
+need `sudo` to install Docker. On macOS, Homebrew is needed if Docker is not
+already installed. The Microsoft Store and CasaOS app remain the simplest
+options for those platforms.
+
+For a VPS, copy `.env.example` to `.env`, set
+`FRONTEND_ORIGIN=https://pos.yourdomain.com`, `COOKIE_SECURE=true` and
+`PUBLIC_BASE_URL=https://pos.yourdomain.com`, and put HTTPS in front of the
+app (see [Where to run it](#where-to-run-it)).
+
+### Updating
+
+Docker and CasaOS installs include a small updater container
+(`nodedr-pos-updater`, see [`updater/`](updater/server.js)). When a newer
+version is published, admins see an **"Update available"** banner in the app.
+Go to **Settings → Updates**, click **Update now** and confirm your password —
+the updater downloads that exact version, swaps the two app containers (about
+a minute) and the page reloads. If the download fails (no internet) nothing is
+changed and the error is shown. Your data volume is never touched.
+
+The updater does nothing on its own and only ever touches the backend and
+frontend containers. It needs the Docker socket, which is why it is a separate,
+single-purpose container reachable only over the internal Docker network and
+only with a shared token (`UPDATER_TOKEN` — the default is fine on a LAN; set
+your own in `.env` on a public server). To update by hand instead:
+`docker compose pull && docker compose up -d`.
+
+### First launch
+
+1. **Create the admin account** (name, e-mail, password — keep it safe).
+2. **Shop details:** name, address, currency, and your GST number if you charge GST.
+3. You land on the dashboard. Next, in this order:
+   - **Inventory → Add product** (or **Bulk import** a CSV/Excel file).
+   - **Settings → Invoice & signature** — pick the bill style and upload your authorised signature.
+   - **Settings → Payments** — add your UPI id to show a QR at checkout.
+   - **POS Checkout** — scan or search products and sell.
+4. *Optional:* **Settings → Features** — turn on **IMEI / serial numbers & warranty** if you sell phones, laptops or appliances.
+   It is **off by default**; when on, the IMEI is asked **when you sell** a product (nothing is entered into stock beforehand).
+5. *Optional:* connect your online store (**Settings → Online stores / Integrations**) — see [docs/API.md](docs/API.md).
+
+Printers, barcode scanners and other hardware: [Hardware setup](#hardware-setup).
+What is verified and what still needs real-device testing: [docs/ROADMAP.md](docs/ROADMAP.md).
+
+## How to use NodeDR POS
+
+Start at the dashboard, then follow this workflow. The [full step-by-step
+tutorial](TUTORIAL.md) includes the complete setup guide and screenshot gallery.
+
+### 1. Create your shop
+
+On first launch, create an administrator account with your name, email, and a
+strong password. Enter your shop name and address, then choose the currency and
+tax options that fit your business. Finish setup to open the dashboard. Company
+and tax details can be changed later in **Settings**.
+
+![NodeDR POS dashboard showing sales, inventory alerts, and online orders](docs/screenshots/dashboard.png)
+
+### 2. Add products and set stock
+
+Open **Inventory → Add product**. Enter the product name, cost and selling
+prices, opening stock, and reorder level. Add a SKU, scan an existing barcode,
+or use **Generate** when an item has no barcode. Set a category and tax rate
+where applicable, then save. Products are then ready for checkout. Use CSV or
+Excel import for a larger catalogue.
+
+![Inventory list with product quantities](docs/screenshots/inventory.png)
+
+![Add-product form with barcode scan and generate options](docs/screenshots/add-product.png)
+
+Optional product features include weighted items and IMEI/serial tracking.
+Turn on IMEI tracking in **Settings → Features** if you sell phones, laptops,
+or appliances. It is off by default. When enabled, enter the identifier of
+each unit at checkout; there is no need to register identifiers in stock first.
+
+![Settings with optional IMEI tracking](docs/screenshots/features.png)
+
+### 3. Complete a sale
+
+Open **POS Checkout**, scan a barcode or search for a product, and add it to
+the cart. Scan again or adjust quantity to sell multiple units. Review the
+items and total, optionally attach a customer, choose an available payment
+method, enter the amount received, and complete the sale. From the confirmation
+you can print a receipt or download a PDF. Past invoices are available in
+**Sales** for review and reprinting.
+
+![POS checkout with a weighed item and payment QR](docs/screenshots/pos.png)
+
+For IMEI-tracked items, checkout asks for each unit's identifier and the bill
+can include its warranty details.
+
+![IMEI captured during checkout](docs/screenshots/imei-sale.png)
+
+### 4. Manage customers, suppliers, and orders
+
+- **Customers:** add and search customer records, link them to sales, and
+  share a loyalty page when needed.
+- **Purchasing:** add suppliers, create and review purchase orders, and use
+  **Reorder** suggestions. Products appear there when stock reaches their
+  configured reorder level.
+- **Online orders:** connected website orders move through **New**, **Packing**,
+  **Ready**, and **Collected**. Connect WooCommerce or Shopify in
+  **Settings → Online stores**, or connect a custom website using the
+  [API guide](docs/CUSTOM_STORE.md). Products are matched by SKU. Orders paid
+  online can be handed over; pay-at-pickup orders can be billed at collection.
+- **Team:** administrators can add staff accounts and assign access roles.
+
+![Online orders board with New, Packing, Ready, and Collected columns](docs/screenshots/orders.png)
+
+### 5. Review reports, invoices, and warranty
+
+In **Reports**, choose 7, 30, or 90 days to review revenue, gross profit,
+average bill, category sales, hourly trends, and top products. Tax summaries
+are available as CSV; review tax figures with your accountant before filing.
+Configure **Settings → Receipt** for receipt details and **Settings → Invoice
+& signature** for A4 invoices and the shop signature.
+
+![Reports with revenue, margin, category, and hourly trends](docs/screenshots/reports.png)
+
+![A4 tax invoice with warranty table and signature](docs/screenshots/invoice-a4.png)
+
+When serial tracking is enabled, open **Warranty** and scan or enter an
+identifier to find its sale and warranty status.
+
+![Warranty lookup showing sale date and warranty status](docs/screenshots/warranty.png)
+
+### Back up and update
+
+Docker Compose and CasaOS installations store app data in persistent Docker
+storage. Back it up regularly. Use the in-product updater when an update is
+available, or update a manual Compose installation with
+`docker compose pull && docker compose up -d`. See [Backing up your data](#backing-up-your-data)
+and [Updating](#updating) for details.
+
+### Screenshot gallery
+
+All tutorial screenshots are in [`docs/screenshots/`](docs/screenshots/):
+
+| App screen | Screenshot |
+| --- | --- |
+| Dashboard | [View screenshot](docs/screenshots/dashboard.png) |
+| Inventory | [View screenshot](docs/screenshots/inventory.png) |
+| Add product | [View screenshot](docs/screenshots/add-product.png) |
+| Product features | [View screenshot](docs/screenshots/features.png) |
+| POS checkout | [View screenshot](docs/screenshots/pos.png) |
+| IMEI product setup | [View screenshot](docs/screenshots/product-imei.png) |
+| IMEI checkout | [View screenshot](docs/screenshots/imei-sale.png) |
+| Online orders | [View screenshot](docs/screenshots/orders.png) |
+| Reports | [View screenshot](docs/screenshots/reports.png) |
+| A4 invoice | [View screenshot](docs/screenshots/invoice-a4.png) |
+| Warranty lookup | [View screenshot](docs/screenshots/warranty.png) |
+
+## Contents
+
+- [Install](#install)
+- [How to use NodeDR POS](#how-to-use-nodedr-pos)
+- [Features](#features)
+- [Architecture](#architecture)
+- [Tech stack](#tech-stack)
+- [Quick start (Docker Compose)](#quick-start)
+- [Where to run it](#where-to-run-it)
+- [Hardware setup](#hardware-setup)
+- [Customer display](#customer-display-phone-tablet-or-second-screen)
+- [Reference data & validation](#reference-data--validation)
+- [Customer dues ("udhaar")](#customer-dues-udhaar)
+- [Returns & exchanges](#returns--exchanges)
+- [Updating](#updating)
+- [Backing up your data](#backing-up-your-data)
+- [Resetting / clearing data](#resetting--clearing-data)
+- [Project structure](#project-structure)
+- [Local development (without Docker)](#local-development-without-docker)
+- [API overview](#api-overview)
+- [External Stock API (e-commerce integration)](#external-stock-api-e-commerce-integration)
+- [Security](#security)
+- [Contributing](#contributing)
+- [License](#license)
+
+## What's new in 1.6
+
+- **Spain VERI\*FACTU (implemented, not certified)** — every sale becomes a simplified
+  invoice in a tamper-evident, hash-chained log; returns become corrective invoices;
+  receipts print the AEAT QR code (native on 80 mm thermal paper); records are reported to
+  the tax agency with your own certificate. Off by default and invisible outside Spain. It
+  has not been run against the live AEAT portal and no *Declaración Responsable* has been
+  issued, so it is **not** claimed compliant. Details and limits:
+  [docs/verifactu.md](docs/verifactu.md).
+
+## What's new in 1.5
+
+- **Find products online** — Inventory → *Find online* searches free community
+  databases (Open Food / Beauty / Products Facts) by name or barcode. Results are
+  validated (barcode check digit, junk names, wrong-code records) and shown with
+  warnings (only the barcode or search text leaves your server, never shop data);
+  *Review & add* opens the normal form pre-filled. Scanning an unknown
+  barcode in Inventory does this automatically. In any product form, *Check online*
+  compares the barcode with the online record and lets you replace the name,
+  category or photo field by field. Nothing is saved until you press Save.
+- **Product photos** — add a photo (file or phone camera) when registering or
+  editing a product; shown in the inventory list.
+- **Customer display on any device** — open the link from POS → *Customer display*
+  on a phone, tablet or second PC on the same network; it follows the till live,
+  including the UPI payment QR. See [Customer display](#customer-display-phone-tablet-or-second-screen).
+  A chime (and a spoken amount for UPI/card) confirms each completed sale.
+- **Online orders** — billing follows who took the money: orders *paid on the
+  website* are handed over without a POS bill; *pay-at-pickup* orders are billed
+  in the POS at hand-over (the cashier can override). **Connect your own website**
+  through the API — see [docs/CUSTOM_STORE.md](docs/CUSTOM_STORE.md).
+- **Purchasing** — edit/delete suppliers, create purchase orders by hand, cancel
+  orders.
+- **Smarter installs** — `install.sh` picks a free port if 1994 is taken, and the
+  CasaOS README explains the "ports in use" orphan-container fix.
+
+Update an existing install from **Settings → Updates → Update now** (see
+[Updating](#updating)).
+
+## What's new in 1.2
+
+optional IMEI / serial-number tracking with warranty lookup (off by default, captured at sale) · bulk product import (CSV/XLSX) ·
+an e-commerce **REST API + MCP server** that can take bills, reserve click-and-collect
+orders and check warranty · A4 tax-invoice PDFs with your authorised signature and a
+UPI QR · UPI QR / multi-currency / card-terminal payments · profit, category and
+hourly-sales reports with GSTR-1 exports · suppliers & purchase orders · shifts and
+granular staff permissions · online-orders board for e-commerce orders, customer loyalty page ·
+WooCommerce/Shopify order sync · optional self-hosted multi-branch sync · an
+optional desktop tray helper · a redesigned light forest-green UI.
+
+Per-item status (what is verified and what still needs real hardware or accounts):
+[docs/ROADMAP.md](docs/ROADMAP.md). API and MCP reference: [docs/API.md](docs/API.md).
+Security review: [docs/SECURITY-AUDIT.md](docs/SECURITY-AUDIT.md).
+
+## Features
+
+- **Guided onboarding** — first launch walks you through creating an admin
+  account and configuring your company (name, address, currency, GST,
+  loyalty) before you ever see the dashboard.
+- **Barcode-driven POS checkout** — scan to add to the cart, scan again to
+  bump quantity, press **Enter** to finalize. Unknown barcodes surface a
+  toast instead of blocking the register. No USB scanner? Scan barcodes
+  and QR codes from a phone/tablet camera instead — see
+  [Camera barcode & QR scanning](#camera-barcode--qr-scanning).
+- **GST / tax** — per-product GST rates with HSN/SAC codes. The price you
+  enter is treated as MRP (GST-inclusive, as required by law) — GST is
+  never added on top of it, only broken out as CGST/SGST on the receipt for
+  compliance, alongside your GSTIN. Toggle GST on/off in settings.
+- **Discounts** — percentage or flat-amount discount per sale (applied
+  correctly across mixed tax rates), *and* a standing per-product discount
+  % you can set once in Inventory that applies automatically every time
+  that product is sold.
+- **Loyalty program** — customers (by phone) earn points on every purchase,
+  redeemable as a discount at checkout — enter an amount or tap **Use all**.
+  Configurable earn rate and point value. The dashboard ranks your top
+  customers by current point balance.
+- **Customer dues ("udhaar")** — a cash sale can be paid short of the total
+  when a customer is attached; the shortfall becomes a running due balance
+  you can record payments against later, with a full payment history. See
+  [Customer dues](#customer-dues-udhaar).
+- **Returns & exchanges** — look up any past bill by invoice number right
+  from the register, queue one or more lines to return, and either settle
+  it as a standalone refund or fold it straight into a new sale as an
+  exchange. Returned stock goes back into inventory automatically, and the
+  same unit can never be returned twice, even across several partial
+  returns. See [Returns & exchanges](#returns--exchanges).
+- **Store credit** — a refund can be kept with the customer as store
+  credit instead of paid out in cash, tracked as its own running balance
+  per customer (separate from an udhaar due) and spendable on any future
+  purchase with a tap of **Use store credit** at checkout. See
+  [Returns & exchanges](#returns--exchanges).
+- **Runs on your own hardware or in the cloud** — it's a two-container
+  Docker Compose stack, so the same `docker compose up` that runs it on a
+  shop's counter machine also runs it unmodified on any VPS/cloud
+  provider, if you'd rather manage it remotely or across locations. See
+  [Where to run it](#where-to-run-it).
+- **Multi-currency** — over 20 major currencies (₹ INR, $ USD, € EUR, £ GBP, HK$ HKD,
+  and more), switchable in settings; the symbol flows through the whole app
+  and onto receipts. One source of truth on the backend
+  ([`backend/src/lib/currency.js`](backend/src/lib/currency.js)) so
+  onboarding and settings can never drift apart.
+- **Offline barcode & QR generator** — no barcode on the product? Generate a
+  valid EAN-13 in one click and print or download a label as a PNG or JPG,
+  no internet or external barcode service involved. See
+  [Barcode & QR label generator](#barcode--qr-label-generator).
+- **GST/PAN validation & reference data** — live format validation for GSTIN
+  and PAN, GST state-code decoding, quick-select GST rate slabs, and a
+  per-product unit (UQC). Optionally import the official HSN/SAC/PIN/IFSC
+  CSVs for autocomplete and address/bank lookups. See
+  [Reference data & validation](#reference-data--validation).
+- **Works on phones and tablets** — the nav collapses to a slide-out drawer
+  below desktop width, so the register is fully usable from a counter
+  tablet or phone, not just a desktop browser.
+- **Customers** — a directory with visit counts, total spend, and loyalty
+  balances.
+- **Customizable receipts** — set a header and footer; the thermal receipt
+  renders your branding, GST breakdown, discounts, and loyalty summary.
+- **Multiple payment methods** — Cash (with change calculation), UPI, Card.
+- **Staff accounts & roles** — an admin plus any number of cashier logins;
+  admins manage staff and settings, cashiers run the register.
+- **Sales history** — searchable past invoices with a detail view and
+  one-click receipt reprint.
+- **Inventory management** — scan a known barcode to edit stock; an unknown
+  one is looked up online and opens "Add Product" pre-filled (blank if nothing
+  is found or you're offline). Low-stock dashboard alerts. An
+  "allow negative stock" setting lets you keep selling past zero when your
+  counts run behind reality, instead of blocking the register.
+- **Print or download receipts, three ways** — "Print" opens a formatted
+  receipt and triggers your browser's own print dialog, so you pick
+  whichever printer the OS/CUPS has configured (thermal, laser, or "Save as
+  PDF"); "Download PDF" always generates a real PDF file; "Print via USB"
+  sends raw ESC/POS bytes straight to a USB thermal printer with no print
+  dialog at all. All three are laid out to use as little paper as
+  possible. An "auto-print" setting can skip the extra click and send the
+  receipt to print the moment a sale completes. See
+  [printing & receipts](#printing--receipts).
+- **Sales dashboard with charts** — revenue trend, best seller, top-selling
+  products, payment method mix, top loyalty customers, and today's totals
+  and low-stock alerts — plus a one-click CSV export of your sales history.
+- **Zero external calls at runtime** — once built, the app never talks to
+  anything outside your machine.
+
+## Architecture
+
+```
+  Browser / LAN tablet
+        │  http://<machine>:1994   (the ONLY exposed port)
+        ▼
+┌──────────────────────┐   /api/* proxied server-side   ┌──────────────────────┐
+│   frontend  :1994    │ ──────────────────────────────▶ │  backend (internal)  │
+│   Next.js / React     │ ◀────────────────────────────── │  Express + Prisma    │
+└──────────────────────┘   (internal Docker network)      └──────────┬───────────┘
+                                                                      │
+                                                                      ▼
+                                                        SQLite (nodedr-pos_data)
+                                                        (named Docker volume)
+```
+
+Receipts print through the browser's own print dialog (a hidden iframe that
+calls `window.print()`), download as a server-generated PDF, or — via
+"Print via USB" — go straight to a USB thermal printer as raw ESC/POS bytes
+from the backend, which is the one place in this app that does need
+scoped hardware access (see [printing & receipts](#printing--receipts)).
+
+**One port, one origin.** The browser only ever talks to the frontend on
+port **1994**. The Next.js server proxies every `/api/*` request to the
+backend over the internal Docker network — the backend is **not** published
+to the host at all. This means:
+
+- the app works from **any device on the LAN** (a counter tablet, a phone),
+  not just the machine running the containers;
+- session cookies are first-party, so there's no cross-origin/CORS fragility;
+- the API isn't exposed on the network, shrinking the attack surface.
+
+The backend and frontend are two separate containers, neither of which needs
+elevated privileges or host device access — everything still comes up with a
+single `docker compose up`.
+
+The Windows Store app runs the same two-process split natively. Docker Compose
+deployments use separate frontend and backend containers, each supervised and
+updated independently.
+
+## Tech stack
+
+| Layer      | Choice                                                  |
+| ---------- | -------------------------------------------------------- |
+| Frontend   | Next.js (App Router), React, TypeScript, Tailwind CSS     |
+| Data layer | TanStack Query, react-hook-form + Zod                    |
+| Backend    | Node.js, Express, Zod validation, helmet, rate limiting   |
+| Database   | SQLite via Prisma ORM (`better-sqlite3` driver adapter), persisted in a Docker volume |
+| Auth       | bcrypt hashing, HttpOnly JWT cookie, admin/cashier roles   |
+| API access | Browser → Next.js (:1994) → server-side `/api` proxy → backend |
+| Hardware   | Browser print dialog + `pdfkit` for receipts; a custom React hook for the barcode scanner |
+| Barcodes   | `jsbarcode` (EAN-13/CODE128) + `qrcode`, both rendered client-side to canvas — no external barcode service |
+| Charts     | `recharts` for the dashboard's sales trend, top products, and payment mix graphs |
+| Bulk import | `multer` (multipart upload) + `csv-parse`, admin-only, for the Reference Data CSV imports |
+| Deployment | Docker Compose, two `node:24-alpine` multi-stage images    |
+
+## Quick start
+
+Requires [Docker](https://docs.docker.com/get-docker/) and Docker Compose
+(bundled with current Docker Desktop/Engine).
+
+### One-click install
+
+Use the [one-command installer above](#one-command-install-windows-macos-or-linux)
+to install and start NodeDR POS from PowerShell or a macOS/Linux terminal. It
+downloads the project and runs the included setup for you.
+
+If you already cloned the repository and have Docker running, use
+[`install.sh`](install.sh) to build both images, start the stack, wait for the
+backend to report healthy, and print the URL to open:
+
+```bash
+git clone https://github.com/Raktim94/nodedr-pos.git
+cd nodedr-pos
+./install.sh
+```
+
+### Manual install
+
+If you'd rather run each step yourself (or `install.sh` doesn't fit your
+setup), here's exactly what it does, one command at a time:
+
+```bash
+# 1. Get the code
+git clone https://github.com/Raktim94/nodedr-pos.git
+cd nodedr-pos
+
+# 2. Build the backend and frontend images (multi-stage, node:24-alpine).
+#    First run takes a few minutes; later runs are cached and fast.
+docker compose build
+
+# 3. Start both containers in the background. Compose automatically
+#    creates the named volume declared in docker-compose.yml
+#    (nodedr-pos_data) the first time this runs.
+docker compose up -d
+
+# 4. (optional) Watch the logs until you see "listening on port 4000"
+#    and the Next.js server ready message.
+docker compose logs -f
+
+# 5. (later) Stop the stack without deleting your data:
+docker compose down
+```
+
+Then open **http://localhost:1994**. The first launch walks you through:
+
+1. **Admin account** — your name, email, and password.
+2. **Shop setup** — shop name, address, currency symbol, low-stock threshold.
+3. You're dropped onto the dashboard, ready to add products and sell.
+
+All data (the SQLite database and the auto-generated session secret) lives
+in the **`nodedr-pos_data` Docker volume**, not inside the containers, so it
+survives `docker compose down`, container recreation, and image rebuilds.
+It's only removed if you explicitly delete it (see
+[Resetting](#resetting--clearing-data) below).
+
+Want the web UI on a different port, or to deploy somewhere other than
+`localhost`? Copy `.env.example` to `.env` and set values there —
+`docker compose` reads it automatically. **`docker-compose.yml` itself never
+needs editing**, on a shop LAN box or a VPS alike.
+
+## Where to run it
+
+Because the whole app is just the two containers in `docker-compose.yml`,
+`git clone` + `docker compose up` is *all* that's required to run it
+anywhere Docker runs — there's nothing hardcoded to a local machine.
+
+- **On your own machine or shop LAN (recommended default).** The
+  register, the database, and the receipts never leave a box you
+  physically control — no provider has your sales data, and there's
+  nothing to keep paying for. This is what the rest of this README
+  (and the [Security](#security) section) assumes: HTTP is fine because
+  only the shop's trusted network can reach it. No `.env` file is required
+  for this — the built-in defaults already point at `localhost`.
+- **On a VPS/cloud host, if you want it.** The identical
+  `docker compose up` also runs on any VPS (DigitalOcean, Hetzner, a
+  Raspberry Pi you colo, etc.) if you'd rather manage one instance
+  remotely, run it from a machine you don't keep on-site, or reach it
+  from more than one location. Nothing about the app is tied to a
+  specific host, and nothing in the compose file needs to change: copy
+  `.env.example` to `.env`, set `FRONTEND_ORIGIN` to your public
+  `https://` URL and `COOKIE_SECURE=true`, then `docker compose up -d`.
+  The trade-off: a VPS is reachable from the internet, not just your
+  shop's LAN, so treat it like any other publicly reachable service — put
+  a reverse proxy with real HTTPS in front (Caddy/Nginx + Let's Encrypt)
+  so the session cookie is never sent over plain HTTP, and firewall the
+  port to only the IPs that should reach it. See [Security](#security) for
+  the full list — none of it is optional once this stops being a purely
+  local box.
+
+If data residency or "nothing leaves the building" is the priority, the
+local-machine option is the more secure default and needs none of the
+above; the VPS option trades a bit of that isolation for remote reach.
+
+## Hardware setup
+
+### Barcode scanner
+
+No configuration needed. Any USB barcode scanner that acts as a HID
+keyboard (i.e. "just types" the barcode followed by Enter — this is true of
+the vast majority of consumer scanners) works out of the box. The frontend's
+[`useBarcodeScanner`](frontend/hooks/useBarcodeScanner.ts) hook listens for
+keystrokes and, based on inter-keystroke timing, tells scanner input apart
+from a human typing so it never interferes with normal form fields.
+
+### Camera barcode & QR scanning
+
+No USB scanner? Every place a barcode can be typed or scanned — POS
+checkout and the Add/Edit Product form — also has a **Scan with camera** /
+**Scan** button that opens a live camera preview and decodes barcodes and
+QR codes directly in the browser
+([`CameraScannerModal`](frontend/components/CameraScannerModal.tsx), via
+[`@zxing/browser`](https://github.com/zxing-js/browser)). On a phone or
+tablet it requests the back camera by default, with a **Flip camera**
+button to switch to the front camera (or the device's only camera on
+laptops/desktops with no back/front distinction). This works alongside the
+USB scanner above, not instead of it — either input path feeds the exact
+same lookup/add-to-cart logic. The camera requests a 1080p frame (not
+whatever low default the browser picks), asks for continuous autofocus
+where the device supports it, and only scans for the barcode/QR formats
+this app actually uses — all aimed at the same problem: a small code held
+close to the lens needs enough resolution and focus to resolve, not just
+camera access.
+
+#### Camera scanning over HTTPS
+
+Browsers only allow camera access (`getUserMedia`) on a **secure context**:
+an `https://` origin, or `localhost` on the machine itself. The default
+Docker setup serves the app over plain `http://<lan-ip>:1994`, so opening it
+from a phone/tablet works fine for everything *except* the camera — the
+browser blocks it silently, with no permission prompt at all, before the app
+ever gets a chance to ask. On the till machine itself this is a non-issue
+(`http://localhost:1994` is always secure), the gap only shows up on a
+second device over the LAN.
+
+Three ways to fix it, depending on your devices and how you want to reach
+the app:
+
+- **Android / desktop Chrome or Edge — no server change needed.** Visit
+  `chrome://flags/#unsafely-treat-insecure-origin-as-secure`, add
+  `http://<this-machine's-LAN-IP>:1994`, enable the flag, and restart the
+  browser. Camera access then works exactly like on `localhost`. This is a
+  per-browser setting — only do it for a network you trust, and you'll need
+  to repeat it on each device.
+- **iPhone/iPad, or any browser without that flag (Safari has none) — turn
+  on the bundled HTTPS front door.** A `caddy` service ships in
+  `docker-compose.yml` behind the `https` [Compose
+  profile](https://docs.docker.com/compose/how-tos/profiles/), off by
+  default — a plain `docker compose up` never starts it. Turn it on with:
+
+  ```bash
+  docker compose --profile https up -d
+  ```
+
+  Then open `https://<this-machine's-LAN-IP>` (no `:1994` — Caddy listens on
+  the standard HTTPS port, 443 by default, overridable via `HTTPS_PORT` in
+  `.env`) on the phone/tablet instead. Caddy generates a self-signed
+  certificate automatically (via its built-in CA — see
+  [`Caddyfile`](Caddyfile)); every browser, including Safari on iOS, shows a
+  one-time "this certificate isn't trusted" warning to tap/click past, and
+  the connection is then genuinely HTTPS, so the camera works from then on.
+  Nothing else changes — it's the same app, same login, same data, just
+  reached through an extra reverse-proxy hop. `install.sh` and the plain
+  `http://<ip>:1994` path keep working unmodified whether or not you ever
+  turn this on.
+- **Any device, no cert warning at all, works from outside your LAN too —
+  Cloudflare Tunnel.** Unlike Caddy's self-signed certificate above, this
+  gets you a real, publicly-trusted one (Cloudflare's), so there's nothing
+  to click through on any device — at the cost of your traffic routing
+  through Cloudflare's network instead of staying fully local. Two modes,
+  both off by default:
+
+  ```bash
+  # Free, no Cloudflare account needed — URL changes every restart. Check
+  # `docker compose logs cloudflared-quick` for the current one.
+  docker compose --profile cloudflare-quick up -d
+
+  # A stable URL on your own domain, survives restarts. Requires a
+  # Cloudflare account with your domain added, a tunnel created under
+  # Zero Trust > Networks > Tunnels with a Public Hostname routed to
+  # http://frontend:3000, and that tunnel's token set as
+  # CLOUDFLARE_TUNNEL_TOKEN in .env.
+  docker compose --profile cloudflare up -d
+  ```
+
+  Whichever URL you get (`*.trycloudflare.com` or your own domain), open it
+  on the phone/tablet the same way you would `http://<ip>:1994` — same app,
+  same login, same data. Recommended if you want a permanent, stable way
+  to reach the till from staff phones/tablets without touching per-device
+  browser settings.
+
+### Barcode & QR label generator
+
+Not every product arrives with a scannable barcode — loose produce, house
+brands, or anything repackaged in-store. Rather than force a manual code,
+the **Add Product** form has a **Generate** button next to the barcode
+field: it produces a structurally valid EAN-13 using the `20`–`29` prefix
+range GS1 reserves for restricted/internal circulation — i.e. exactly this
+use case, not a real resellable product code (see
+[`frontend/lib/barcode.ts`](frontend/lib/barcode.ts)). It's checked against
+your existing catalog for uniqueness and retried automatically on collision.
+
+From the Inventory page, the barcode icon on any row opens a label with a
+**Barcode** / **QR code** toggle, rendered client-side with `jsbarcode` /
+`qrcode` — no network call, works fully offline. From there:
+
+- **Print label** opens a new tab and calls `window.print()`, same as
+  receipts — any printer your OS/CUPS knows about, including small label
+  printers.
+- **Download PNG or JPG** saves the rendered code as an image — pick the
+  format with the radio buttons above the download button.
+
+### Printing & receipts
+
+After checkout (or from the Sales page on any past invoice), you get three
+buttons:
+
+- **Print** opens a formatted receipt in a hidden iframe and immediately
+  triggers `window.print()`. The browser's own print dialog shows every
+  printer your OS knows about — a USB/network thermal printer set up through
+  CUPS (Linux/macOS) or the Windows print spooler, a regular office printer,
+  or a "Save as PDF" virtual printer. Set up your thermal printer once at the
+  OS level (CUPS, or the manufacturer's driver) the same way you would for
+  any other application, and it shows up here. The backend never touches a
+  USB device for this path.
+- **Download PDF** generates a real PDF file server-side (via `pdfkit`, a
+  pure-JS renderer — no shell-out, no native dependencies) and downloads it,
+  for emailing, archiving, or printing later from any device.
+- **Print via USB** sends the receipt straight to a USB thermal printer as
+  raw ESC/POS commands (see
+  [`backend/src/lib/escposUsb.js`](backend/src/lib/escposUsb.js) and
+  [`escposReceipt.js`](backend/src/lib/escposReceipt.js)) — no print
+  dialog, no OS driver/CUPS setup, just the receipt cutting off the roll a
+  moment after you click. This needs the one-time Docker device
+  passthrough described below.
+
+Turn on **Settings → Receipt → Print automatically after every sale** to
+skip the extra click on the **Print** button entirely — it does not
+trigger USB printing, since that has no print-dialog "preview" step to
+skip in the first place; use "Print via USB" directly when you want that.
+
+Both the HTML and PDF layouts are kept deliberately tight, since every
+extra millimetre of whitespace is real, recurring thermal paper cost: the
+HTML receipt's CSS has no unnecessary paragraph margins, and the PDF's
+page height is computed per-receipt (short receipts get a short page)
+instead of a fixed size — a one-item receipt is roughly half the page
+length it used to be.
+
+Because Print/Download PDF are just normal browser actions, the whole
+app — including checkout — works identically on a machine with no printer
+attached at all; you'd simply skip those buttons, or "Print via USB" would
+fail with a clear "no USB printer found" message instead of crashing
+anything.
+
+#### Direct-USB (ESC/POS) printer setup
+
+On a **Linux till this works by default after `docker compose up`** — the
+backend container ships with the USB access it needs and no vendor/product
+ID to configure. "Print via USB" reaches the printer over two transports,
+tried in order (see [`backend/src/lib/escposUsb.js`](backend/src/lib/escposUsb.js)):
+
+1. The **kernel usblp character device** (`/dev/usb/lp0`) — the exact path a
+   plain `echo "hi" > /dev/usb/lp0` writes to. This is the primary transport
+   because most cheap 80mm printers present a *vendor-specific* USB class,
+   which the kernel binds via `usblp` but a class-based scan would miss.
+2. **libusb** raw bulk transfer — a fallback for printers exposing the
+   standard USB Printer class, detaching the kernel driver first so the
+   interface can be claimed.
+
+**Check it works — one click, no sale needed:** go to **Settings → Receipt
+→ USB printer check** and press **Check printer** (reports the kernel
+printer nodes and any USB printer-class device the backend can see) and
+**Print test slip** (sends a real cut-off test receipt). Set **USB printer
+paper width** (80mm standard / 58mm compact) so the fixed-width layout uses
+the right column count. Optionally turn on **Print automatically after every
+sale** and set **Auto-print using → Direct USB** so every receipt prints
+with no dialog.
+
+**What the container needs (already in `docker-compose.yml`, Linux host
+only):** the `backend` service bind-mounts `/dev/bus/usb` and grants
+`device_cgroup_rules` on two device majors — `189` (usbfs, for libusb) and
+`180` (usblp, the kernel printer driver). This is **not** `privileged: true`;
+the backend still can't touch anything else on the host, and the container
+runs as root only so it can open the printer node. Nothing here fails at
+`compose up` when no printer is attached.
+
+##### Does it need root?
+
+**The backend container runs as root — this is required for direct-USB
+printing and is already configured, so you do not run anything extra.** The
+kernel printer node `/dev/usb/lp0` is owned `root:lp` (mode `660`), and the
+container creates it on demand with `mknod`; both need root inside the
+container. That's why `backend/Dockerfile` has **no `USER` line** and
+`docker-compose.yml` sets **no `user:`** for the backend — leave it that way.
+If you add a non-root `USER`/`user:`, "Print via USB" stops working (it can't
+open or create the printer node); the browser **Print** button still works.
+
+On the **host** you run Docker the normal way — root is only needed if your
+login isn't in the `docker` group:
+
+```bash
+# If your user is in the `docker` group (check with: id -nG | grep docker):
+docker compose up -d --build
+
+# Otherwise, run Docker with sudo:
+sudo docker compose up -d --build
+```
+
+To print a receipt straight from the host terminal (bypassing the app, e.g.
+to confirm the hardware), you need root or membership of the `lp` group,
+because of that `root:lp 660` node:
+
+```bash
+sudo sh -c 'printf "test\n\n\n" > /dev/usb/lp0'   # one-off, as root
+# ...or grant your user ongoing access and skip sudo next time:
+sudo usermod -aG lp "$USER"      # then log out and back in
+printf "test\n\n\n" > /dev/usb/lp0
+```
+
+**Windows / macOS:** the USB passthrough above is Linux-only. On a Windows
+till, install the printer's own driver and use the **Print** button (the
+browser print dialog) — set **Auto-print using → Browser print dialog**. If
+`docker compose up` errors on the `/dev/bus/usb` mount on Docker Desktop,
+delete the `volumes:` `/dev/bus/usb` line and the `device_cgroup_rules:`
+block from the `backend` service — only direct-USB printing needs them.
+
+##### Printer compatibility
+
+Any **USB thermal receipt printer that speaks ESC/POS** works — the
+overwhelming majority of 58mm and 80mm receipt printers, cheap to premium:
+
+- **Budget / generic 58mm & 80mm:** Xprinter (XP-58, XP-80, XP-T80), Everycom
+  (EC-58, EC-80), Rugtek, Retsol, TVS RP series, Pos-80 / POS-5890 clones,
+  Black Copper, Hoin, Gprinter — the typical `₹1,500–5,000` counter printers.
+- **Mid / premium:** Epson TM-T82 / TM-T88, Bixolon SRP series, Citizen
+  CT-S series, TVS RP 3200/3230.
+
+Not supported by the *USB* path: non-ESC/POS label printers (e.g. Zebra ZPL),
+and Bluetooth/Wi-Fi-only printers. For those, or on Windows, use **Print**
+(browser dialog) or **Download PDF** instead — those work with any printer
+your OS knows about.
+
+##### Troubleshooting (Linux till)
+
+Run these on the **host** (the machine with the printer), not inside Docker:
+
+```bash
+lsusb                          # confirm the printer is listed at all
+ls -l /dev/usb/lp0             # confirm the kernel bound it (usblp)
+dmesg | grep -i usblp          # what happened when you plugged it in
+echo -e "TEST\n\n\n" > /dev/usb/lp0   # print directly, bypassing the app
+```
+
+- If `echo > /dev/usb/lp0` prints but the app's **Print via USB** doesn't,
+  re-run **Check printer** in Settings — and make sure the backend container
+  has the `/dev/bus/usb` mount and `device_cgroup_rules` (see above).
+- **Permission denied** writing to `/dev/usb/lp0`: add your user to the
+  `lp` group — `sudo usermod -aG lp $USER`, then log out and back in.
+- **"Printer is busy"**: another program or the OS/CUPS print queue is
+  holding the device. Close it (or remove the printer from CUPS) and retry —
+  the raw USB path wants exclusive access.
+- **Nothing detected**: try a different USB cable/port; some printers only
+  bind `usblp` when powered on *before* being plugged in.
+
+One real limitation worth knowing: generic ESC/POS printers default to a
+single-byte codepage (usually CP437), not UTF-8. The USB print path
+transliterates accented Latin letters (café → cafe) and falls back
+non-ASCII currency symbols to the 3-letter currency code (€ → EUR), but
+non-Latin scripts (Devanagari, Arabic, etc.) print as `?` — the Print and
+Download PDF buttons remain the correct choice whenever exact non-Latin
+text on the receipt matters, since both render full Unicode.
+
+### Receipt layout
+
+Both the print view and the PDF share the same data: shop header/footer,
+GST/CGST/SGST breakdown, discount, and loyalty summary, driven by your
+settings. The HTML template lives in
+[`backend/src/lib/receipt.js`](backend/src/lib/receipt.js) (`buildReceiptHtml`)
+and the PDF renderer in [`backend/src/lib/pdf.js`](backend/src/lib/pdf.js)
+(`buildReceiptPdf`).
+
+```
+================================================
+                  Raktim Store
+                   1 MG Road
+                    Pune, MH
+             GSTIN: 27ABCDE1234F1Z5
+================================================
+Date: 11-07-2026 18:06     Bill: #INV-2026-00002
+Cust: Rahul
+Ph:   9990001111
+------------------------------------------------
+Item                      Qty     Rate    Amount
+------------------------------------------------
+Biscuits                    1   118.00    118.00
+  GST @ 18%
+------------------------------------------------
+Subtotal                              Rs. 118.00
+CGST (incl.)                            Rs. 9.00
+SGST (incl.)                            Rs. 9.00
+Loyalty (100 pts)                     Rs. -10.00
+================================================
+GRAND TOTAL                           Rs. 108.00
+================================================
+Paid (UPI)                            Rs. 108.00
+------------------------------------------------
+         You earned 108 loyalty points!
+================================================
+            Thank You! Visit Again.
+================================================
+```
+
+The "Rate" you enter on a product is its MRP — GST-inclusive, as required
+by law — so CGST/SGST are a breakup of tax already inside that price, not
+an addition to it: Subtotal is the MRP total, and GRAND TOTAL is Subtotal
+minus discounts, full stop.
+
+The header, footer, currency, GSTIN, and whether the GST breakdown shows are
+all driven by your settings, so this layout adapts to how you configure the
+shop.
+
+## Customer display (phone, tablet or second screen)
+
+The customer display shows the cart and total, and the **UPI payment QR for the
+exact amount** (INR shops with a UPI id set). It works on any device on the same
+network — no cables, no app.
+
+1. On the POS page press **Customer display**.
+2. Open the link it shows on the phone/tablet/second PC, or scan its QR code.
+   The link looks like `http://<machine>:1994/display?key=<secret>` — for
+   example `http://192.168.1.40:1994/display?key=…`.
+3. That's it. The display follows the till automatically (about once a second)
+   and reconnects by itself if Wi-Fi drops. The POS shows how many displays are
+   connected.
+
+Notes: the `key` is a secret generated on first use and stored in
+`data/display-key` — anyone with the link can watch the cart, so keep it to your
+own screens. Opening `/display` without a key only mirrors a window in the same
+browser as the till. Use the browser's fullscreen / "Add to Home screen" on a
+tablet for a kiosk look. Completing a sale also plays a chime (and speaks the
+amount for UPI/card) on the till; toggle it with **Payment sound** on the POS
+page.
+
+## Reference data & validation
+
+### Built-in (small, stable lists)
+
+[`frontend/lib/masters.ts`](frontend/lib/masters.ts) bundles small, stable
+reference data used across the app's forms:
+
+| Data | Used for |
+| --- | --- |
+| `GST_RATES` | Quick-select chips (0/5/12/18/28%) on the product GST rate field |
+| `GST_STATE_CODES` | Decoding a GSTIN's first two digits to a state name in Settings |
+| `UQC_UNITS` | The Unit dropdown on each product (KGS, PCS, BOX, …) — see [below](#product-units-uqc) |
+| `BUSINESS_TYPES` | Common Indian business registration types |
+| `GENERIC_PRODUCT_CATEGORIES` | Datalist suggestions on the product Category field (plus whatever categories are already in your catalog) |
+| `isValidGstinFormat` / `isValidPanFormat` | Live, non-blocking format hints on the GSTIN/PAN fields in Settings |
+
+These are **structural/format checks only** (regex, not the GSTIN checksum
+digit algorithm) — deliberately advisory rather than hard validation, so a
+real GSTIN/PAN is never rejected by a subtly wrong client-side rule.
+
+### Bulk data (admin-imported CSV)
+
+Full HSN/SAC code catalogs (tens of thousands of entries), PIN codes, and
+IFSC codes are **deliberately not bundled** — these are large, frequently-
+revised government/RBI datasets, and shipping a fixed snapshot in an
+offline app would go stale and risks being silently wrong on real tax
+filings or bank transfers.
+
+Instead, **Settings → Reference Data** (admin only) lets you import a CSV
+of the current official file yourself, at any time:
+
+| Dataset | CSV columns | Official source |
+| --- | --- | --- |
+| HSN codes | `code, description, gstRate` (rate optional) | CBIC HSN directory |
+| SAC codes | `code, description, gstRate` (rate optional) | CBIC SAC directory |
+| PIN codes | `pincode, area, district, state` | India Post / data.gov.in |
+| IFSC codes | `ifsc, bank, branch, address, district, state` | RBI IFSC directory |
+
+Each import **replaces** the existing rows for that dataset — re-importing
+an updated file is always safe, there's no incremental merge to reason
+about. Once loaded:
+
+- The product **HSN/SAC field** autocompletes against the imported tax codes.
+- **Company settings** gets a PIN-code lookup that autofills city/state.
+- **Reference Data** also has a standalone IFSC search box, for looking up
+  a bank/branch by code without it being tied to any other field.
+
+Nothing here is required — the app works fully without ever visiting this
+tab; it only adds autocomplete/autofill convenience once you've loaded data.
+
+### Product units (UQC)
+
+Each product has an optional **Unit** (e.g. `KGS`, `PCS`, `BOX`, from the
+standard GST Unit Quantity Codes). It's snapshotted onto each invoice line
+at sale time — same pattern as `name`/`taxRate` — so it shows on receipts
+("3 KGS") and doesn't change retroactively if you edit the product later.
+
+## Customer dues ("udhaar")
+
+A cash sale can be finalized with **Amount received** less than the total
+whenever a customer (with a phone number) is attached — the shortfall is
+added to that customer's running due balance instead of blocking the sale.
+The POS warns you before checkout if a looked-up customer already has an
+outstanding due, and again if the current sale will add to it.
+
+Record a payment against a due from the **Customers** page — click the due
+amount next to any customer to open a small form; it's capped at their
+current balance and kept as its own history (`CustomerDuePayment`) rather
+than just decrementing a number, so there's an audit trail of who paid
+what and when.
+
+## Returns & exchanges
+
+The **Return / Exchange** panel on the POS screen lets a cashier look up
+any past bill by invoice number, then choose which lines — and what
+quantity of each — to return. There's no separate "returns" page: it's
+part of the same checkout screen as a new sale, so a customer swapping one
+item for another is a single transaction, not two.
+
+- **Standalone return.** Queue lines from a past bill with nothing else in
+  the cart and finalize — the returned quantity restocks immediately, and
+  the refund pays out as **Cash, UPI, Card**, or is kept as the customer's
+  **store credit** (a running `creditBalance`, separate from an
+  udhaar/due balance) for them to spend on a future purchase.
+- **Exchange.** Queue a return *and* ring up new items in the same
+  checkout. The return's value is netted against the new sale total before
+  anything else: if the new items cost more, the customer pays the
+  difference as usual; if the return is worth more, the leftover pays down
+  any outstanding due first, then refunds as cash/UPI/card or store credit
+  for whatever's still left over. A return netted this way is recorded
+  with `refundMethod: "BILL_OFFSET"` rather than one of the payment
+  methods above, since no money actually changed hands for that portion.
+- **Partial & repeat returns are safe.** How much of a line is still
+  returnable is computed by summing every prior `ReturnItem` against that
+  invoice line (not a running counter), so returning 1 of 3 units today
+  and the remaining 2 next week works correctly, and a unit that's already
+  been returned can never be returned again.
+- **Refund amount is capped, not just quantity.** The refund per line
+  defaults to what was actually charged for that quantity (accounting for
+  any per-line discount already applied), and the cashier can lower it —
+  but never raise it above what the customer paid.
+
+See [`backend/src/routes/returns.js`](backend/src/routes/returns.js) for
+the standalone flow and the `returns` handling inside
+[`backend/src/routes/invoices.js`](backend/src/routes/invoices.js) for how
+an exchange nets against a new sale; both share the same `Return` /
+`ReturnItem` tables so a bill's full return history is queryable either
+way.
+
+## Updating
+
+To pull the latest code and redeploy:
+
+```bash
+# 1. Get the latest commits. Run this from inside your nodedr-pos
+#    directory — if you're not already there, cd into it first:
+#    cd nodedr-pos
+git pull
+
+# 2. Rebuild the images and recreate the containers with the new code.
+#    Re-running install.sh does exactly this too.
+docker compose up -d --build
+```
+
+Your data is safe across updates — the SQLite database and session secret
+live in the `nodedr-pos_data` Docker volume, entirely separate from the
+container filesystem, so rebuilding or recreating containers never touches
+them. Run `docker volume ls` to see it.
+
+## Backing up your data
+
+The database lives inside a Docker-managed volume rather than a plain host
+folder, so back it up via a throwaway container that mounts the volume
+read-only and copies the file out:
+
+```bash
+docker run --rm -v nodedr-pos_data:/data:ro -v "$PWD":/backup alpine \
+  cp /data/pos.db /backup/pos-backup-$(date +%Y%m%d).db
+```
+
+That drops a timestamped copy of `pos.db` in your current directory on the
+host.
+
+## Resetting / clearing data
+
+To wipe everything (admin account, shop settings, products, invoices) and
+go through onboarding again — useful after testing, or to start a real shop
+from a clean slate:
+
+```bash
+# 1. Stop the stack AND remove the named volume (the -v is what deletes
+#    the database and session secret; without it, `down` only removes
+#    the containers and your data is untouched).
+docker compose down -v
+
+# 2. Start back up — a fresh volume is created automatically and
+#    you'll land on the onboarding wizard again.
+docker compose up -d
+```
+
+To remove the volume without also touching the containers:
+`docker volume rm nodedr-pos_data` (stack must be stopped first).
+
+If you only want to clear the *catalog and sales history* but keep your
+admin login and shop settings, don't delete the files — instead delete
+products/invoices from inside the app (Inventory page), since there's no
+current admin-account-preserving "factory reset" endpoint.
+
+## Project structure
+
+```
+nodedr-pos/
+├── docker-compose.yml         # declares the nodedr-pos_data named volume
+├── docs/screenshots/          # README images
+├── casaos/                    # CasaOS/ZimaOS app store manifest + assets — see casaos/README.md
+├── packaging/                 # optional desktop tray helper
+├── backend/
+│   ├── Dockerfile
+│   ├── prisma/schema.prisma  # User, ShopSettings, Product, Invoice, InvoiceItem, Return
+│   └── src/
+│       ├── server.js
+│       ├── routes/           # auth, settings, products, invoices, returns, print
+│       ├── middleware/auth.js
+│       └── lib/              # prisma client, JWT secret, currencies, receipt HTML + PDF rendering
+└── frontend/
+    ├── Dockerfile
+    ├── next.config.ts        # /api → backend proxy (rewrites)
+    ├── app/
+    │   ├── onboarding/, login/                         # unauthenticated flows
+    │   └── (app)/dashboard, pos, inventory, customers, sales, settings
+    ├── components/           # AppShell, GlobalSearch, CameraScannerModal, ProductModal, BarcodeLabelModal, ReturnPanel, SalesCharts, ReceiptActions, ui/* (incl. Sparkline)
+    ├── lib/                  # api client, format helpers, barcode.ts, masters.ts (reference data)
+    └── hooks/                # useBarcodeScanner, useProducts, useCustomers, useInvoices, useReturns, useAuth, useShopSettings, useSyncStatus
+```
+
+## Local development (without Docker)
+
+Run the backend and frontend in two terminals.
+
+```bash
+# Terminal 1 — backend on :4000
+cd backend
+cp .env.example .env
+npm install
+npm run prisma:migrate:dev
+npm run dev
+
+# Terminal 2 — frontend on :1994 (proxies /api to the backend)
+cd frontend
+npm install
+BACKEND_URL=http://localhost:4000 npm run dev
+```
+
+Open `http://localhost:1994`. The browser only talks to :1994; the Next.js
+dev server proxies `/api/*` to `BACKEND_URL` (default `http://localhost:4000`).
+No API URL is ever baked into the browser bundle.
+
+## API overview
+
+All endpoints are under `/api` and reached through the frontend proxy at
+`http://<machine>:1994/api`. Except `/auth/status`, `/auth/login`,
+`/auth/register`, and the one-time `POST /settings`, every route requires the
+`nodedr_session` cookie; admin-only routes also require the `admin` role.
+
+| Method & path                  | Purpose                                  |
+| ------------------------------- | ----------------------------------------- |
+| `GET /auth/status`              | Whether an admin account exists yet       |
+| `POST /auth/register`           | Onboarding — create the first admin (once) |
+| `POST /auth/login` / `/logout`  | Session management                        |
+| `POST /auth/change-password`    | Change your own password                  |
+| `GET/POST/PUT /auth/users`      | Staff account management (**admin only**) |
+| `GET/POST/PUT /settings`        | Company/currency/GST/loyalty/receipt config (PUT is **admin only**) |
+| `GET/POST/PUT/DELETE /products` | Catalog CRUD, `+/barcode/:code`, `/low-stock` |
+| `GET/POST/PUT /customers`       | Customer directory, `+/phone/:phone` lookup, `+/top-loyalty` ranking |
+| `POST /customers/:id/settle-due`, `GET /customers/:id/due-payments` | Record / list payments against a customer's due balance |
+| `POST /invoices`                | Finalize a sale — server computes price, tax, discount, loyalty, due; decrements stock; all transactional. Can also carry `returns`/`creditApplied`, netting an exchange against the same bill |
+| `GET /invoices`, `/invoices/summary`, `/invoices/:id` | Sales history & dashboard totals |
+| `POST /returns`                 | Standalone return against a past invoice — restocks quantity, refunds cash/UPI/card or store credit |
+| `GET /returns/by-invoice/:invoiceId` | Returns already made against an invoice, for computing remaining returnable quantity |
+| `GET /invoices/analytics`       | Dashboard chart data — revenue trend, top products, payment mix |
+| `GET /invoices/export.csv`      | Downloads sales history as CSV (optional `?from=&to=` range) |
+| `GET /print/:invoiceId/receipt` | Self-printing HTML receipt (opens in a new tab, calls `window.print()`) |
+| `GET /print/:invoiceId/pdf`     | Downloads the receipt as a PDF file |
+| `GET /masters/summary`          | Row counts for the Reference Data settings tab |
+| `POST /masters/tax-codes/import`, `GET /masters/tax-codes/search` | Import (**admin only**) / autocomplete HSN or SAC codes |
+| `POST /masters/pincodes/import`, `GET /masters/pincodes/:code` | Import (**admin only**) / look up a PIN code |
+| `POST /masters/ifsc/import`, `GET /masters/ifsc/:code` | Import (**admin only**) / look up an IFSC code |
+| `GET/POST/PUT/DELETE /api-keys`  | Manage External Stock API credentials (**admin only**, step-up password confirm) — see below |
+
+## External Stock API (e-commerce integration)
+
+A separate, key-authenticated API — not the session-cookie auth every other
+route above uses — for an external system (typically an e-commerce
+storefront) to read this shop's live stock and, if you allow it, report its
+own sales back so stock stays correct in both places without manual
+reconciliation.
+
+### Setting it up
+
+1. In the app, go to **Settings → Integrations → New API key**.
+2. Give it a name, decide whether it can only *read* stock or also *write*
+   it (write access lets the connected system decrement stock when it sells
+   something), and optionally a `https://` webhook URL on the other system
+   that should be notified whenever a linked product's stock changes here.
+3. Copy the **API key** and (if you set a webhook URL) the **webhook
+   secret** shown — both are shown exactly once and can't be retrieved
+   again. Store them as secrets in the other system, not in its repo.
+4. On each product you want to expose (Inventory → edit product), set its
+   **SKU** to the same value the other system uses to identify that product.
+   A product with no SKU is never returned by this API.
+
+### Endpoints
+
+All under `/api/external`, reached the same way as everything else — through
+the frontend proxy (`https://<your-domain>/api/external/...`), so whatever
+HTTPS front door you've set up (see [Where to run it](#where-to-run-it)) is
+what secures this too; don't expose the backend's own port directly.
+Authenticate with `Authorization: Bearer <api key>`.
+
+| Method & path | Access | Purpose |
+| --- | --- | --- |
+| `GET /external/products` | `products:read` | Every product with a SKU linked (paginated, `updatedSince` for incremental sync): `{ sku, barcode, name, stock, available, unit, sellingPrice, taxRate, … }` |
+| `GET /external/products/:sku` | `products:read` | Same shape, single product |
+| `POST /external/bills`, `GET /external/bills/:ref[/pdf]`, `POST /external/orders`, `GET /external/warranty/:serial`, `POST /mcp` | scoped | Take bills, PDFs, click-and-collect orders, warranty, MCP — see [docs/API.md](docs/API.md) |
+| `PATCH /external/products/:sku/stock` | `stock:write` | Adjust stock — body is `{ "delta": -2 }` (relative) or `{ "set": 17 }` (absolute), never both. Rejects going negative unless *Allow selling below zero stock* is on in Settings, same rule a POS checkout follows. Add `"idempotencyKey": "<your event id>"` to make a retried call safe to resend — a repeated key returns the original result instead of applying the change twice (kept in memory for 24h) |
+
+### Webhook (stock pushed to you)
+
+If a key has a webhook URL, this shop `POST`s it whenever a linked product's
+stock changes here — a POS sale, a return, or a manual stock edit:
+
+```json
+POST <your webhook URL>
+X-Nodedr-Signature: sha256=<hex>
+Content-Type: application/json
+
+{
+  "event": "stock.updated",
+  "timestamp": "2026-08-26T12:00:00.000Z",
+  "changes": [{ "sku": "MUG-001", "stock": 14 }]
+}
+```
+
+Verify the signature before trusting the body: it's an HMAC-SHA256 of the
+raw request bytes using *that key's own* webhook secret (from step 3 above),
+hex-encoded. Delivery is best-effort with an 8s timeout and is never
+retried automatically by this app — treat "set stock to N for this SKU" as
+idempotent on your side (safe to apply even if a delivery is ever repeated
+or arrives out of order) rather than relying on exactly-once delivery.
+
+### Design notes
+
+- Keys are hashed (SHA-256) at rest — the plaintext key and webhook secret
+  are never stored and never shown again after creation.
+- A write key can only ever *decrease this shop's* uncertainty by reporting
+  real sales — it can't read or touch anything outside `/api/external`
+  (no customer data, no settings, no other product fields).
+- Revoking a key is immediate and permanent; issue a new one rather than
+  expecting a revoked key to come back.
+- This surface has its own, stricter rate limit (120 req/min per IP) on top
+  of the app-wide one, since — unlike the rest of this app — it's meant to
+  be reachable from outside your shop's LAN.
+
+## Security
+
+Security posture (verified end-to-end):
+
+- **Passwords**: bcrypt (cost 12); login is timing-uniform and returns an
+  identical error for unknown-user vs wrong-password. Login is rate-limited
+  (10 / 15 min) on top of a global limiter (300 req/min).
+- **Sessions**: `HttpOnly`, `SameSite=Lax` JWT cookie (`HS256`, algorithm
+  pinned). Every request re-checks the account still exists and is active, so
+  disabling a staff member logs them out immediately. Set `COOKIE_SECURE=true`
+  when serving over HTTPS.
+- **Authorization**: all data routes require auth; settings and staff
+  management require the `admin` role. The last active admin can't be demoted
+  or disabled.
+- **Server-authoritative money**: prices, tax, discount caps, loyalty value,
+  and change are always computed server-side from the catalog and settings —
+  the client only sends product ids, quantities, and intent, so a tampered
+  request can't alter what a sale charges. Redeemable points are capped at the
+  customer's balance.
+- **Input validation**: every write endpoint validates with Zod (allowlisted
+  fields — no mass assignment); all DB access is parameterized via Prisma.
+  CSV imports are admin-only, capped at 25MB, and parsed in-memory (no
+  temp files, no shell-out).
+- **Reduced surface**: the backend is not published to the host — only the
+  frontend (:1994) is reachable, and it proxies to the backend privately.
+  Helmet sets `X-Content-Type-Options`, `X-Frame-Options`, etc. Neither
+  container runs `privileged: true` or needs host device access — printing
+  goes through the browser's own print dialog, not a driver bundled into the
+  app.
+- **Secrets**: the JWT signing secret is auto-generated on first boot and
+  stored (mode 600) in the data volume — never in the repo.
+
+Designed for a **trusted local network** (a shop's LAN or a single machine).
+It's HTTP by default; if you expose it beyond the counter, terminate HTTPS in
+front of it and set `COOKIE_SECURE=true` in `.env` (see
+[Where to run it](#where-to-run-it)) — no other file needs to change.
+
+## Contributing
+
+Issues and PRs are welcome — see **[`CONTRIBUTING.md`](CONTRIBUTING.md)**
+for dev setup, the conventions this codebase leans on (server-authoritative
+money, ESC/POS printer quirks, barcode-scanner HID handling), and the
+PR/issue process. This is a small, focused tool — please keep
+contributions aligned with "offline-first single-shop POS" rather than
+expanding scope into multi-tenant/cloud territory. This project follows
+the [Contributor Covenant](CODE_OF_CONDUCT.md).
+
+## License
+
+Copyright © 2026 [Nodedr Infotech Private Limited](https://www.nodedr.com/)
+and Raktim Ranjit. Licensed under the
+[GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0). In short:
+you're free to self-host, use, and modify this software for your shop. If
+you modify it and run that modified version as a network service for
+others, you must make your modified source available to those users
+under the same license — this keeps improvements to a self-hosted
+business tool in the open rather than disappearing into a closed
+commercial fork.
+
+See [`MAINTAINERS.md`](MAINTAINERS.md) for project maintainers.
+
+
+## Case study
+
+Read the [NodeDR POS case study](https://www.raktimranjit.com/projects/nodedr-pos) for the product background and design decisions.
+
+Maintainer: [Raktim Ranjit](https://www.raktimranjit.com/)
