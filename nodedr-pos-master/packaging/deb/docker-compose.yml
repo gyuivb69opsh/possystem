@@ -1,0 +1,33 @@
+services:
+  backend:
+    image: ghcr.io/raktim94/nodedr-pos-backend:@VERSION@
+    container_name: nodedr-pos-backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: "file:/app/data/pos.db"
+      PORT: "4000"
+      FRONTEND_ORIGIN: "${FRONTEND_ORIGIN:-http://localhost:1994}"
+      COOKIE_SECURE: "${COOKIE_SECURE:-false}"
+      PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-}"
+      VERIFACTU_PRODUCER_ID: "${VERIFACTU_PRODUCER_ID:-}"
+      VERIFACTU_PRODUCER_NAME: "${VERIFACTU_PRODUCER_NAME:-}"
+      VERIFACTU_PRODUCER_COUNTRY: "${VERIFACTU_PRODUCER_COUNTRY:-}"
+      VERIFACTU_SYSTEM_ID: "${VERIFACTU_SYSTEM_ID:-}"
+    expose:
+      - "4000"
+    volumes:
+      - data:/app/data
+      - /dev/bus/usb:/dev/bus/usb
+    device_cgroup_rules:
+      - 'c 189:* rmw'
+      - 'c 180:* rmw'
+  frontend:
+    image: ghcr.io/raktim94/nodedr-pos-frontend:@VERSION@
+    container_name: nodedr-pos-frontend
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-1994}:3000"
+    depends_on:
+      - backend
+volumes:
+  data:
