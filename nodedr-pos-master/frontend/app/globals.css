@@ -1,0 +1,304 @@
+@import "tailwindcss";
+
+/*
+ * Premium productivity theme: a calm light canvas with forest-green accents
+ * (default), plus an evergreen dark variant. Neutrals swap per [data-theme]
+ * on <html> (set before first paint by the inline script in app/layout.tsx,
+ * see lib/theme.ts). Tokens drive every component, so restyling here
+ * restyles the whole app. Contrast is checked for AA: muted text on white
+ * is ~5:1, white on --brand is ~6:1.
+ */
+[data-theme="light"] {
+  color-scheme: light;
+
+  --background: #f7f9f6;
+  --surface: #ffffff;
+  --surface-elevated: #ffffff;
+  --surface-muted: #f1f5f0;
+  --surface-glass: rgba(255, 255, 255, 0.82);
+
+  --border: #e4ebe4;
+  --border-subtle: #edf2ed;
+
+  --foreground: #17251d;
+  --foreground-muted: #5b6a60;
+
+  --danger: #c13c3c;
+  --danger-soft: rgba(193, 60, 60, 0.1);
+  --success: #176c45;
+  --success-soft: #e8f3ea;
+  --warning: #9a5b0d;
+  --warning-soft: rgba(216, 154, 67, 0.16);
+
+  --brand: #176c45;
+  --brand-foreground: #ffffff;
+  --brand-soft: #e8f3ea;
+  --brand-glow: rgba(23, 108, 69, 0.3);
+
+  --shadow-card: 0 2px 8px rgb(14 45 27 / 4%), 0 14px 36px rgb(14 45 27 / 4%);
+  --shadow-float: 0 18px 56px rgb(11 38 24 / 16%);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --background: #0b1410;
+  --surface: #101c16;
+  --surface-elevated: #14231b;
+  --surface-muted: #16251d;
+  --surface-glass: rgba(16, 28, 22, 0.8);
+
+  --border: #ffffff14;
+  --border-subtle: #ffffff0a;
+
+  --foreground: #e6efe9;
+  --foreground-muted: rgba(230, 239, 233, 0.62);
+
+  --danger: #f08080;
+  --danger-soft: rgba(240, 128, 128, 0.14);
+  --success: #5cc592;
+  --success-soft: rgba(92, 197, 146, 0.14);
+  --warning: #e8b45a;
+  --warning-soft: rgba(232, 180, 90, 0.14);
+
+  --brand: #4fb583;
+  --brand-foreground: #062014;
+  --brand-soft: rgba(79, 181, 131, 0.14);
+  --brand-glow: rgba(79, 181, 131, 0.4);
+
+  --shadow-card: 0 1px 0 rgb(255 255 255 / 3%) inset, 0 10px 30px rgb(0 0 0 / 25%);
+  --shadow-float: 0 18px 56px rgb(0 0 0 / 55%);
+}
+
+:root {
+  --green-950: #082c1d;
+  --green-900: #0d3b28;
+  --green-700: #176c45;
+  --green-500: #3d9a69;
+  --mint: #bfe8ce;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-surface-muted: var(--surface-muted);
+  --color-surface-glass: var(--surface-glass);
+
+  --color-border: var(--border);
+  --color-border-subtle: var(--border-subtle);
+
+  --color-foreground: var(--foreground);
+  --color-foreground-muted: var(--foreground-muted);
+
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-brand-soft: var(--brand-soft);
+  --color-brand-glow: var(--brand-glow);
+
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+* {
+  border-color: var(--border);
+}
+
+/* Fine-line icon treatment app-wide. Every lucide-react icon renders with a
+   "lucide" class on its root <svg>, and stroke-width is an inherited SVG
+   property, so this one rule thins every icon in the app from lucide's
+   default (2) down to the spec's fine-line weight without editing every
+   call site. */
+svg.lucide {
+  stroke-width: 1.5;
+}
+
+/* Soft accent glow — opt-in per icon, layered on top of the fine-line
+   treatment above, for nav items and card headers that should read as
+   "premium" rather than a stock flat glyph. */
+.icon-glow {
+  filter: drop-shadow(0 0 6px var(--brand-glow));
+}
+
+/* ThemeToggle renders both icons; CSS (not React state) decides which one
+   shows, keyed off the same [data-theme] attribute the flash-prevention
+   script sets — so there's nothing for the icon to get wrong on hydration. */
+[data-theme="dark"] .theme-toggle-moon {
+  display: none;
+}
+[data-theme="light"] .theme-toggle-sun {
+  display: none;
+}
+
+/* Frosted glass surface for headers, dropdowns, and elevated panels. */
+.glass-panel {
+  background: var(--surface-glass);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border-subtle);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--brand-soft);
+}
+
+
+/* ---- Motion: short, transform/opacity only, one stable end state ----
+   IMPORTANT: use animation-fill-mode `backwards`, never `both`/`forwards`, on
+   anything that can contain a dialog. A filled transform animation keeps the
+   element a containing block for position:fixed descendants, which squeezed
+   every modal into its page container (clipped, half-dimmed, overlapping). */
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(24px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes pop-in {
+  from { opacity: 0; transform: scale(0.97) translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes grow-x { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes grow-y { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+
+/* Page + card entrance. Stagger a group by setting style={{"--i": index}}. */
+.page-enter { animation: rise-in 320ms var(--ease-out) backwards; }
+.rise { animation: rise-in 340ms var(--ease-out) backwards; animation-delay: calc(var(--i, 0) * 45ms); }
+.drawer-in { animation: slide-in-right 300ms var(--ease-out) backwards; }
+.dialog-in { animation: pop-in 280ms var(--ease-out) backwards; }
+.backdrop-in { animation: fade-in 220ms ease-out backwards; }
+.bar-grow { transform-origin: bottom; animation: grow-y 700ms var(--ease-out) backwards; animation-delay: calc(var(--i, 0) * 40ms + 200ms); }
+
+/* Cards: borders + soft shadow, a 1px lift on actionable ones. */
+.card-surface { background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow-card); border-radius: 16px; }
+.card-lift { transition: transform 160ms var(--ease-out), box-shadow 160ms var(--ease-out), border-color 160ms; }
+.card-lift:hover { transform: translateY(-2px); border-color: var(--brand-glow); }
+.press:active { transform: scale(0.98); }
+
+/* The one heavy tile: deep green with a barely-there diagonal motif. */
+.tile-dark {
+  background:
+    repeating-linear-gradient(135deg, rgb(255 255 255 / 3.5%) 0 2px, transparent 2px 12px),
+    linear-gradient(160deg, var(--green-900), var(--green-950));
+  color: #eaf6ee;
+}
+
+.tabular { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+.num-xl { font-size: 2rem; line-height: 1.05; letter-spacing: -0.04em; font-weight: 650; font-variant-numeric: tabular-nums; }
+
+:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+
+/* Respect reduced motion: no scale/translate/stagger, near-instant fades. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Homepage hero signature: a mocked-up thermal receipt ("this is what we'd
+   bill you — nothing"). Fixed cream/ink colors regardless of [data-theme]:
+   real receipt paper doesn't switch to dark mode, and the contrast against
+   the page's own dark background is part of the effect. Scoped to
+   .receipt-* only — not used anywhere else in the app. */
+:root {
+  --receipt-paper: #f3efe4;
+  --receipt-ink: #2a2620;
+  --receipt-ink-muted: rgba(42, 38, 32, 0.55);
+}
+
+.receipt-card {
+  position: relative;
+  background: var(--receipt-paper);
+  color: var(--receipt-ink);
+}
+
+/* Torn/perforated bottom edge: two 45deg gradients tiled into a sawtooth,
+   sitting just past the card's own bottom border. Relies on the hero
+   section behind it being a flat --background — the gaps between "paper"
+   triangles show that color through, reading as torn-away paper. */
+.receipt-card::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -9px;
+  height: 10px;
+  background-image:
+    linear-gradient(135deg, var(--receipt-paper) 50%, transparent 50.5%),
+    linear-gradient(225deg, var(--receipt-paper) 50%, transparent 50.5%);
+  background-size: 16px 16px;
+  background-position: bottom left;
+  background-repeat: repeat-x;
+}
+
+@keyframes receipt-print {
+  from {
+    transform: translateY(-18px) rotate(0deg);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0) rotate(-2deg);
+    opacity: 1;
+  }
+}
+
+.receipt-print-in {
+  animation: receipt-print 700ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .receipt-print-in {
+    animation: none;
+    transform: rotate(-2deg);
+  }
+}
+
+/* FAQ accordion: hide the default <details> marker (the chevron icon in
+   page.tsx rotates itself via Tailwind's group-open: variant instead). */
+.faq-row > summary {
+  list-style: none;
+}
+.faq-row > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Progress ring: the arc draws once from empty to its value, then stops. */
+@keyframes ring-draw { from { stroke-dashoffset: var(--len); } }
+.ring-arc { animation: ring-draw 800ms var(--ease-out) 250ms backwards; }
