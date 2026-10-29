@@ -1,0 +1,621 @@
+datasource db {
+  provider = "sqlite"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  name      String
+  email     String   @unique
+  password  String
+  role      String   @default("admin") // "admin" | "cashier" | "franchisor" (read-only, hub)
+  active    Boolean  @default(true)
+  // Granular rights for non-admins, comma separated: discount,returns,reports,
+  // inventory,customers,orders. Admins implicitly have everything.
+  permissions String @default("")
+  // A cashier may discount up to this % of a bill (null = no cap when the
+  // "discount" right is held).
+  maxDiscountPercent Float?
+  createdAt DateTime @default(now())
+}
+
+model ShopSettings {
+  id             Int      @id @default(autoincrement())
+  shopName       String
+  legalName      String?
+  address1       String
+  address2       String?
+  city           String?
+  state          String?
+  phone          String?
+  email          String?
+  // Currency
+  currencyCode   String   @default("INR") // INR | USD | EUR | GBP
+  currencySymbol String   @default("Rs.")
+  // Tax / GST
+  gstEnabled     Boolean  @default(false)
+  gstNumber      String?
+  panNumber      String?
+  defaultTaxRate Float    @default(0)
+  // Loyalty
+  loyaltyEnabled Boolean  @default(false)
+  pointsPerUnit  Float    @default(0) // points earned per 1 currency unit spent
+  pointValue     Float    @default(0) // currency value of 1 point when redeemed
+  // Receipt customisation
+  receiptHeader  String?
+  receiptFooter  String   @default("Thank You! Visit Again.")
+  showGst        Boolean  @default(true)
+  autoPrintReceipt Boolean @default(false)
+  // Direct-USB (ESC/POS) printing — see backend/src/lib/escposReceipt.js.
+  // Paper width in mm; only 58 or 80 are meaningful (drives the fixed
+  // monospace column count for the raw text layout).
+  usbPrinterWidth Int @default(80)
+  // How a receipt prints when "auto-print after sale" is on:
+  //   "browser" — the OS/browser print dialog (window.print), the default
+  //               and what a Windows machine with a printer driver uses.
+  //   "usb"     — raw ESC/POS straight to the USB thermal printer, with NO
+  //               modal dialog. Required on a headless/kiosk Debian till
+  //               where the browser print dialog has no configured printer
+  //               and would otherwise hang the screen after every sale.
+  autoPrintMethod String @default("browser")
+  // Inventory
+  lowStockAlert  Int      @default(5)
+  allowNegativeStock Boolean @default(false)
+  // Address lookup (see PinCode below)
+  pincode        String?
+  // Authorised-signatory signature printed on A4 invoices and receipts.
+  // Stored as a file under data/signatures/ (see lib/signatures.js) — only
+  // the file name lives here, so settings reads stay small and fast.
+  signatureFile  String?
+  signatoryName  String?
+  // "receipt" = 80mm thermal-style PDF, "a4" = full tax invoice PDF.
+  invoiceLayout  String   @default("receipt")
+  // Merchant UPI id (VPA) — drives the dynamic UPI QR shown at checkout
+  // and printed on invoices.
+  upiId          String?
+  termsText      String?
+  // Optional feature switch: ask for an IMEI / serial number at the moment of
+  // sale (and track warranty from it). Off by default — most shops don't need it.
+  serialTracking Boolean  @default(false)
+  // Hardware
+  cashDrawer     Boolean  @default(false) // pulse the cash drawer on a cash sale (ESC/POS via the receipt printer)
+  // Card terminal (Stripe Terminal / Square Terminal). Provider secrets are
+  // AES-GCM encrypted (lib/secretBox.js) — never stored or returned in clear.
+  terminalProvider String @default("none") // none | stripe | square
+  terminalConfigEnc String?
+  // Multi-currency: JSON {"USD": 83.2} = base-currency units per 1 foreign unit.
+  fxRates        String?
+  fxUpdatedAt    DateTime?
+  // Scheduled e-mail reports
+  reportEmail    String?
+  reportFrequency String  @default("off") // off | daily | weekly
+  reportLastSentAt DateTime?
+  smtpConfigEnc  String?
+  // Optional self-hosted sync (see lib/sync.js): this instance is standalone,
+  // a branch that reports to a hub, or the hub that consolidates branches.
+  syncRole       String   @default("none") // none | branch | hub
+  syncHubUrl     String?
+  syncBranchCode String?
+  syncSecretEnc  String?
+  syncLastAt     DateTime?
+  // Spain VERI*FACTU (see lib/verifactu/service.js and docs/verifactu.md). Implemented, not certified.
+  // The certificate (.p12) and its password are AES-GCM encrypted (lib/secretBox.js).
+  vfEnabled       Boolean   @default(false)
+  vfEnvironment   String    @default("TEST") // TEST | PRODUCTION — separate chains
+  vfNif           String? // the shop's NIF/CIF (9 characters)
+  vfSeries        String    @default("T1")
+  vfNextNumber    Int       @default(1)
+  vfNextRefundNumber Int    @default(1)
+  vfInstallation  String?
+  vfCertEnc       String?
+  vfCertPassEnc   String?
+  vfCertSubject   String?
+  vfCertExpires   DateTime?
+}
+
+model Product {
+  id            Int           @id @default(autoincrement())
+  barcode       String        @unique
+  // Separate from `barcode` — this is the shared key used to match a
+  // product against an external catalog (e.g. an e-commerce storefront)
+  // over the External API below. Optional: most shops never link a
+  // product externally, and SQLite's unique index allows any number of
+  // NULLs, so leaving it blank never collides with another blank one.
+  sku           String?       @unique
+  name          String
+  category      String?
+  hsn           String?
+  unit          String? // UQC code, e.g. "PCS", "KGS" — see frontend/lib/masters.ts UQC_UNITS
+  purchasePrice Float
+  sellingPrice  Float
+  taxRate       Float         @default(0) // GST % for this product
+  discountType  String?       // "percent" | "amount" | null (no standing discount)
+  discountValue Float         @default(0) // interpreted per discountType; applied automatically at checkout
+  stock         Float         @default(0) // fractional for weighed goods (kg, litre)
+  // With the shop-level serial switch on, a sale of this product must record
+  // one IMEI / serial per unit sold (stock stays a plain quantity).
+  trackSerial   Boolean       @default(false)
+  // Photo, stored as a file under data/product-images/ (see lib/productImages.js).
+  imageFile     String?
+  warrantyMonths Int          @default(0)
+  reorderPoint  Float         @default(0) // suggest a purchase order at or below this stock
+  supplierId    Int?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  invoiceItems  InvoiceItem[]
+  returnItems   ReturnItem[]
+  serials       SerialUnit[]
+  supplier      Supplier?     @relation(fields: [supplierId], references: [id])
+  poItems       PurchaseOrderItem[]
+
+  @@index([name])
+  @@index([category])
+}
+
+// An IMEI / serial number recorded when a unit is SOLD (never pre-registered
+// in stock). Globally unique — one unit can only be sold once until it is
+// returned — and the warranty clock starts at the sale.
+model SerialUnit {
+  id             Int          @id @default(autoincrement())
+  productId      Int
+  serial         String       @unique
+  status         String       @default("SOLD") // SOLD | RETURNED
+  invoiceItemId  Int?
+  soldAt         DateTime?
+  warrantyEndsAt DateTime?
+  note           String?
+  createdAt      DateTime     @default(now())
+  product        Product      @relation(fields: [productId], references: [id])
+  invoiceItem    InvoiceItem? @relation(fields: [invoiceItemId], references: [id])
+  events         SerialEvent[]
+
+  @@index([productId, status])
+  @@index([invoiceItemId])
+}
+
+// Append-only history of a serial: received, sold, returned, claimed...
+model SerialEvent {
+  id        Int        @id @default(autoincrement())
+  serialId  Int
+  type      String // SOLD | RETURNED | CLAIM | NOTE
+  invoiceId Int?
+  note      String?
+  createdAt DateTime   @default(now())
+  serial    SerialUnit @relation(fields: [serialId], references: [id], onDelete: Cascade)
+
+  @@index([serialId])
+}
+
+model Customer {
+  id            Int       @id @default(autoincrement())
+  name          String
+  phone         String    @unique
+  email         String?
+  loyaltyPoints Int       @default(0)
+  totalSpent    Float     @default(0)
+  totalDue      Float     @default(0) // outstanding credit ("udhaar") owed by this customer
+  creditBalance Float     @default(0) // store credit owed TO the customer (e.g. from a return kept as balance)
+  visits        Int       @default(0)
+  gstin         String?
+  // UID of an NFC loyalty card / tag — tapping it on a USB or phone reader
+  // identifies the customer at checkout.
+  cardUid       String?   @unique
+  createdAt     DateTime  @default(now())
+  invoices      Invoice[]
+  duePayments   CustomerDuePayment[]
+  returns       Return[]
+}
+
+// A record of each payment a customer makes against their running due
+// balance — kept as its own audit trail rather than just decrementing
+// Customer.totalDue with no history.
+model CustomerDuePayment {
+  id         Int      @id @default(autoincrement())
+  customerId Int
+  amount     Float
+  note       String?
+  createdAt  DateTime @default(now())
+  customer   Customer @relation(fields: [customerId], references: [id])
+}
+
+model Invoice {
+  id             Int           @id @default(autoincrement())
+  invoiceNumber  String        @unique
+  customerId     Int?
+  customerName   String        @default("Walk-in Customer")
+  customerPhone  String?
+  subtotal       Float // sum of line bases, pre-discount, pre-tax
+  discountType   String? // "percent" | "amount"
+  discountValue  Float         @default(0)
+  discountAmount Float         @default(0) // manual discount in currency
+  taxAmount      Float         @default(0)
+  loyaltyDiscount Float        @default(0) // currency value of redeemed points
+  totalAmount    Float // final payable
+  paymentMethod  String        @default("CASH") // CASH | UPI | CARD
+  amountPaid     Float         @default(0)
+  changeDue      Float         @default(0)
+  dueAmount      Float         @default(0) // unpaid shortfall added to the customer's running due ("udhaar")
+  previousDuePaid Float        @default(0) // old due the customer cleared as part of this same bill
+  returnValue    Float         @default(0) // value of items returned on this bill, netted against the sale
+  creditApplied  Float         @default(0) // store credit the customer spent on this bill
+  refundValue    Float         @default(0) // paid back to the customer (returns beyond the purchase) as cash or credit
+  refundMode     String? // "CASH" | "CREDIT" — how refundValue was settled
+  pointsRedeemed Int           @default(0)
+  pointsEarned   Int           @default(0)
+  // Where the bill came from: "POS" (till), "API" (external storefront via
+  // the External API / MCP). externalRef + apiKeyId make an API bill
+  // idempotent — retrying the same order never double-bills.
+  source         String        @default("POS")
+  externalRef    String?
+  apiKeyId       Int?
+  cashierName    String?
+  // Customer's signature captured at the till (file under data/signatures/).
+  customerSignature String?
+  customerGstin  String?
+  shiftId        Int?
+  // Multi-currency sale: what the customer actually handed over, in their
+  // currency, at the rate in force (base units per 1 foreign unit).
+  payCurrency    String?
+  payRate        Float?
+  payAmount      Float?
+  // Card-terminal payment id (Stripe PaymentIntent / Square checkout) that
+  // the server verified as paid before accepting this CARD sale.
+  paymentRef     String?
+  createdAt      DateTime      @default(now())
+  customer       Customer?     @relation(fields: [customerId], references: [id])
+  items          InvoiceItem[]
+  returns        Return[]
+
+  @@unique([apiKeyId, externalRef])
+  @@index([shiftId])
+  @@index([createdAt])
+  @@index([customerId])
+}
+
+model InvoiceItem {
+  id        Int     @id @default(autoincrement())
+  invoiceId Int
+  productId Int
+  name      String
+  unit      String? // snapshot of the product's UQC at time of sale
+  quantity  Float
+  price     Float // unit selling price at time of sale
+  costPrice Float   @default(0) // product purchase price at time of sale — drives margin reports
+  taxRate   Float   @default(0)
+  taxAmount Float   @default(0) // tax for this line (on discounted base)
+  total     Float // line total incl. tax, after prorated discount
+  warrantyMonths Int @default(0)
+  invoice   Invoice @relation(fields: [invoiceId], references: [id])
+  product   Product @relation(fields: [productId], references: [id])
+  returnItems ReturnItem[]
+  serials   SerialUnit[]
+
+  @@index([invoiceId])
+  @@index([productId])
+}
+
+// A return against a past invoice — one or more line items, each capped at
+// (quantity sold - quantity already returned) so the same unit can't be
+// returned twice. "Returned quantity so far" is always computed by summing
+// ReturnItem rows for an invoice item (see routes/returns.js) rather than
+// stored as a running counter, matching CustomerDuePayment's audit-trail
+// pattern elsewhere in this schema.
+model Return {
+  id           Int          @id @default(autoincrement())
+  invoiceId    Int
+  customerId   Int?
+  totalRefund  Float
+  refundMethod String // "CASH" | "UPI" | "CARD" | "DUE_ADJUST"
+  note         String?
+  createdAt    DateTime     @default(now())
+  invoice      Invoice      @relation(fields: [invoiceId], references: [id])
+  customer     Customer?    @relation(fields: [customerId], references: [id])
+  items        ReturnItem[]
+}
+
+model ReturnItem {
+  id            Int         @id @default(autoincrement())
+  returnId      Int
+  invoiceItemId Int
+  productId     Int
+  name          String
+  quantity      Float
+  refundAmount  Float
+  return        Return      @relation(fields: [returnId], references: [id])
+  invoiceItem   InvoiceItem @relation(fields: [invoiceItemId], references: [id])
+  product       Product     @relation(fields: [productId], references: [id])
+}
+
+// --- Bulk reference data, admin-imported from CSV (see routes/masters.js) ---
+// Large/volatile government datasets (full HSN/SAC catalogs, PIN codes,
+// IFSC) are deliberately NOT bundled with the app — see README > Reference
+// data & validation. These tables just give the admin somewhere to load
+// the official file into, if/when they want autocomplete and lookups.
+
+// A credential for an external system (e.g. an e-commerce storefront) to
+// call the External Stock API (see routes/external.js). The plaintext key
+// is shown to the admin exactly once, at creation — only its SHA-256 hash
+// is ever stored, same principle as a password hash. `webhookUrl`, when
+// set, is where this integration is notified (HMAC-signed with its own
+// `webhookSecret`) whenever a linked product's stock changes here, so a
+// connected storefront can mirror stock live instead of only pulling it.
+model ApiKey {
+  id            Int       @id @default(autoincrement())
+  name          String
+  // First 8 hex chars of the key, kept only so the admin list can show
+  // "which key is this" without ever re-displaying the full secret.
+  keyPrefix     String
+  keyHash       String    @unique
+  // Read-only keys can only look up stock; write keys may also adjust it
+  // (used by a storefront reporting its own sales back to the POS).
+  canWrite      Boolean   @default(false)
+  // Comma-separated capability list, least-privilege by default:
+  //   products:read  stock:write  bills:write  bills:read  warranty:read
+  scopes        String    @default("products:read")
+  webhookUrl    String?
+  webhookSecret String?
+  lastUsedAt    DateTime?
+  revoked       Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+}
+
+model TaxCode {
+  id          Int     @id @default(autoincrement())
+  type        String // "HSN" | "SAC"
+  code        String
+  description String
+  gstRate     Float?
+
+  @@unique([type, code])
+}
+
+model PinCode {
+  pincode  String  @id
+  area     String?
+  district String?
+  state    String?
+}
+
+model IfscCode {
+  ifsc     String  @id
+  bank     String?
+  branch   String?
+  address  String?
+  district String?
+  state    String?
+}
+
+model Supplier {
+  id        Int      @id @default(autoincrement())
+  name      String
+  phone     String?
+  email     String?
+  address   String?
+  gstin     String?
+  notes     String?
+  createdAt DateTime @default(now())
+  products  Product[]
+  orders    PurchaseOrder[]
+}
+
+model PurchaseOrder {
+  id         Int      @id @default(autoincrement())
+  number     String   @unique
+  supplierId Int
+  status     String   @default("DRAFT") // DRAFT | SENT | RECEIVED | CANCELLED
+  notes      String?
+  totalCost  Float    @default(0)
+  createdAt  DateTime @default(now())
+  receivedAt DateTime?
+  supplier   Supplier @relation(fields: [supplierId], references: [id])
+  items      PurchaseOrderItem[]
+
+  @@index([status])
+}
+
+model PurchaseOrderItem {
+  id          Int      @id @default(autoincrement())
+  orderId     Int
+  productId   Int
+  name        String
+  quantity    Float
+  unitCost    Float
+  receivedQty Float    @default(0)
+  order       PurchaseOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product     Product  @relation(fields: [productId], references: [id])
+}
+
+// A cashier's register session: opening float, cash in/out, counted close.
+model Shift {
+  id            Int       @id @default(autoincrement())
+  userId        Int
+  userName      String
+  openedAt      DateTime  @default(now())
+  closedAt      DateTime?
+  openingFloat  Float     @default(0)
+  closingCounted Float?
+  expectedCash  Float?
+  variance      Float?
+  note          String?
+  movements     ShiftMovement[]
+
+  @@index([userId, closedAt])
+}
+
+model ShiftMovement {
+  id        Int      @id @default(autoincrement())
+  shiftId   Int
+  type      String // IN | OUT
+  amount    Float
+  note      String?
+  createdAt DateTime @default(now())
+  shift     Shift    @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+}
+
+// Shown to customers on their portal page (/me/<token>).
+model Announcement {
+  id        Int      @id @default(autoincrement())
+  title     String
+  body      String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
+
+// An online order from an e-commerce store (API / WooCommerce / Shopify) for
+// click-and-collect or delivery. Stock is reserved when the
+// order is created and handed back if it is cancelled; the bill is raised
+// when the customer collects (or immediately for prepaid delivery).
+model Order {
+  id          Int       @id @default(autoincrement())
+  channel     String // API | WOOCOMMERCE | SHOPIFY | GENERIC
+  externalId  String?
+  status      String    @default("NEW") // NEW | PACKING | READY | COLLECTED | CANCELLED
+  fulfilment  String    @default("PICKUP") // PICKUP | DELIVERY
+  pickupCode  String
+  customerName  String  @default("Online Customer")
+  customerPhone String?
+  customerEmail String?
+  note        String?
+  total       Float     @default(0)
+  paid        Boolean   @default(false)
+  paymentRef  String?
+  apiKeyId    Int?
+  dedupScope  String    @default("") // who sent it: key:<id> / store:<id> — externalId is unique per sender
+  integrationId Int? // the WooCommerce/Shopify/generic store that sent it — status changes are pushed back
+  invoiceId   Int?      @unique
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  items       OrderItem[]
+
+  @@unique([channel, dedupScope, externalId])
+  @@index([status])
+}
+
+model OrderItem {
+  id        Int    @id @default(autoincrement())
+  orderId   Int
+  productId Int
+  name      String
+  quantity  Float
+  price     Float
+  order     Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+}
+
+// A connected WooCommerce / Shopify / generic store. Webhook + API secrets
+// are AES-GCM encrypted at rest (lib/secretBox.js).
+model Integration {
+  id          Int       @id @default(autoincrement())
+  platform    String // woocommerce | shopify | generic
+  name        String
+  secretEnc   String // webhook signing secret
+  configEnc   String? // outbound stock-sync credentials (JSON)
+  active      Boolean   @default(true)
+  lastEventAt DateTime?
+  createdAt   DateTime  @default(now())
+}
+
+// ---- Hub side of branch sync (syncRole = "hub") ----
+model Branch {
+  id         Int       @id @default(autoincrement())
+  code       String    @unique
+  name       String
+  secretEnc  String
+  lastSyncAt DateTime?
+  createdAt  DateTime  @default(now())
+  stock      BranchStock[]
+  days       BranchDay[]
+}
+
+model BranchStock {
+  branchId  Int
+  barcode   String
+  name      String
+  category  String?
+  stock     Float
+  price     Float
+  updatedAt DateTime @default(now())
+  branch    Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@id([branchId, barcode])
+}
+
+model BranchDay {
+  branchId Int
+  day      String // YYYY-MM-DD
+  revenue  Float
+  tax      Float
+  cost     Float
+  count    Int
+  branch   Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@id([branchId, day])
+}
+
+model Transfer {
+  id           Int      @id @default(autoincrement())
+  fromBranchId Int
+  toBranchId   Int
+  status       String   @default("PENDING") // PENDING | SHIPPED | RECEIVED
+  note         String?
+  createdAt    DateTime @default(now())
+  items        TransferItem[]
+}
+
+model TransferItem {
+  id         Int      @id @default(autoincrement())
+  transferId Int
+  barcode    String
+  name       String
+  quantity   Float
+  transfer   Transfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+}
+
+// Branch side: transfers already applied locally, so a lost acknowledgement
+// can never apply the same stock movement twice.
+model AppliedTransfer {
+  transferId Int      @id
+  status     String // SHIPPED | RECEIVED
+  appliedAt  DateTime @default(now())
+}
+
+// Append-only, hash-chained fiscal log (Spain VERI*FACTU). SQLite triggers in migration
+// 20261022000000_verifactu refuse DELETE, any change to a record's identity/amounts/XML/hash, and any insert
+// that does not continue the chain. Only the submission outcome columns can change. invoiceId/returnId are
+// plain numbers, not foreign keys: the log must outlive the rows it describes.
+model VerifactuRecord {
+  id            Int       @id @default(autoincrement())
+  issuerNif     String
+  environment   String // TEST | PRODUCTION
+  seq           Int
+  type          String // ALTA
+  invoiceType   String // F2 | R5
+  invoiceNumber String
+  issueDate     String // dd-MM-yyyy, Europe/Madrid
+  taxTotalCents Int
+  totalCents    Int
+  generatedAt   String // FechaHoraHusoGenRegistro
+  previousHash  String?
+  hash          String
+  xml           String
+  qrUrl         String?
+  invoiceId     Int?
+  returnId      Int?
+  status        String    @default("PENDING") // PENDING | ACCEPTED | ACCEPTED_WITH_ERRORS | REJECTED | ERROR
+  attempts      Int       @default(0)
+  nextAttemptAt DateTime  @default(now())
+  csv           String?
+  errorCode     String?
+  errorText     String?
+  responseXml   String?
+  submittedAt   DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@unique([issuerNif, environment, seq])
+  @@unique([issuerNif, environment, invoiceNumber])
+  @@index([invoiceId])
+  @@index([status, nextAttemptAt])
+  @@map("verifactu_records")
+}
