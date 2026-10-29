@@ -1,0 +1,139 @@
+name: Build Windows EXE
+
+# Push to main/master (or Run workflow manually) -> artifact "Cafe-POS-Installer"
+# (Cafe-POS-Setup.exe + SHA256.txt) on the run summary page.
+#
+# Works whether the app files sit at the repo root OR inside a subfolder
+# (e.g. nodedr-pos-master/): the first step finds the folder that has backend/ + frontend/.
+#
+# Safety: read-only token, no secrets, no publishing, push/manual triggers only,
+# installs from lockfiles (npm ci), installer ships no database or JWT secret.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Find app folder
+        run: |
+          APP_DIR=""
+          if [ -f backend/package.json ] && [ -f frontend/package.json ]; then
+            APP_DIR="."
+          else
+            for d in */; do
+              d="${d%/}"
+              if [ -f "$d/backend/package.json" ] && [ -f "$d/frontend/package.json" ]; then APP_DIR="$d"; break; fi
+            done
+          fi
+          if [ -z "$APP_DIR" ]; then echo "::error::backend/ and frontend/ not found in the repo"; exit 1; fi
+          echo "App folder: $APP_DIR"
+          echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # ---------- backend ----------
+      - name: Backend - install, generate Prisma client
+        env:
+          DATABASE_URL: file:./data/build.db
+        run: |
+          cd "$APP_DIR/backend"
+          npm ci
+          npx prisma generate
+          node node_modules/prisma/build/index.js --version
+
+      # ---------- frontend ----------
+      - name: Frontend - install and build
+        env:
+          BACKEND_URL: http://127.0.0.1:4000
+        run: |
+          cd "$APP_DIR/frontend"
+          npm ci
+          npm run build
+          test -f .next/standalone/server.js
+
+      # ---------- stage the app folder ----------
+      - name: Stage app files
+        run: |
+          cd "$APP_DIR"
+          mkdir -p stage/node stage/backend stage/frontend
+          cp "$(cygpath -u "$(node -p 'process.execPath')")" stage/node/node.exe
+          cp -r backend/node_modules backend/prisma backend/src backend/package.json backend/prisma.config.js stage/backend/
+          cp -r frontend/.next/standalone/. stage/frontend/
+          mkdir -p stage/frontend/.next
+          cp -r frontend/.next/static stage/frontend/.next/static
+          cp -r frontend/public stage/frontend/public
+          cp packaging/windows/start-pos.cmd packaging/windows/stop-pos.cmd stage/
+          cp LICENSE stage/LICENSE.txt
+          test -f stage/frontend/server.js
+
+      # ---------- prove it actually starts before shipping ----------
+      - name: Smoke test (start backend + web UI)
+        run: |
+          cd "$APP_DIR/stage/backend"
+          export NODE_ENV=production DATABASE_URL="file:./data/pos.db"
+          mkdir -p data
+          ../node/node.exe node_modules/prisma/build/index.js migrate deploy
+          PORT=4000 ../node/node.exe src/server.js > ../backend.log 2>&1 &
+          BPID=$!
+          cd ../frontend
+          PORT=1994 HOSTNAME=127.0.0.1 ../node/node.exe server.js > ../frontend.log 2>&1 &
+          FPID=$!
+          curl -s -o /dev/null --retry 20 --retry-delay 2 --retry-connrefused http://127.0.0.1:4000/
+          curl -s -o /dev/null --retry 20 --retry-delay 2 --retry-connrefused http://127.0.0.1:1994/
+          echo "backend and frontend both answered"
+          for pid in $BPID $FPID; do
+            taskkill //F //PID "$(cat /proc/$pid/winpid)" > /dev/null 2>&1 || true
+          done
+          sleep 2
+
+      - name: Remove test data (never ship a database or secret)
+        run: |
+          cd "$APP_DIR/stage"
+          rm -rf backend/data backend.log frontend.log
+          mkdir -p backend/data
+
+      # ---------- build the installer .exe ----------
+      - name: Build installer with Inno Setup
+        shell: pwsh
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          Set-Location $env:APP_DIR
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          & $iscc "/DAppVersion=1.0.$env:RUN_NUMBER" packaging\windows\installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
+          $hash = (Get-FileHash dist\Cafe-POS-Setup.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  Cafe-POS-Setup.exe" | Out-File -Encoding ascii dist\SHA256.txt
+          Write-Host "SHA256: $hash"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Cafe-POS-Installer
+          path: |
+            ${{ env.APP_DIR }}/dist/Cafe-POS-Setup.exe
+            ${{ env.APP_DIR }}/dist/SHA256.txt
+          if-no-files-found: error
+          retention-days: 30
