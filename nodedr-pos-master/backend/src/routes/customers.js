@@ -1,0 +1,186 @@
+const express = require('express');
+const { z } = require('zod');
+const prisma = require('../lib/prisma');
+const { requireAuth, requirePerm } = require('../middleware/auth');
+const { makePortalToken } = require('../lib/publicLink');
+const { round2 } = require('../lib/pricing');
+
+const router = express.Router();
+router.use(requireAuth);
+
+const customerSchema = z.object({
+  name: z.string().trim().min(1).max(160),
+  phone: z.string().trim().min(3).max(30),
+  email: z.string().trim().max(200).optional().or(z.literal('')),
+  gstin: z.string().trim().toUpperCase().regex(/^[0-9A-Z]{15}$/, 'GSTIN must be 15 characters').optional().or(z.literal('')),
+});
+
+// GET /api/customers?q=search
+router.get('/', async (req, res) => {
+  const q = (req.query.q || '').toString().trim();
+  const customers = await prisma.customer.findMany({
+    where: q ? { OR: [{ name: { contains: q } }, { phone: { contains: q } }] } : undefined,
+    orderBy: { createdAt: 'desc' },
+    take: 500,
+  });
+  res.json(customers);
+});
+
+// GET /api/customers/top-loyalty?limit=5 — dashboard widget, ranked by
+// current loyalty point balance (not lifetime points earned, since redeemed
+// points are already subtracted — this reflects what a customer could
+// redeem right now).
+router.get('/top-loyalty', async (req, res) => {
+  const limit = Math.min(20, Math.max(1, Number(req.query.limit) || 5));
+  const customers = await prisma.customer.findMany({
+    where: { loyaltyPoints: { gt: 0 } },
+    orderBy: { loyaltyPoints: 'desc' },
+    take: limit,
+  });
+  res.json(customers);
+});
+
+// GET /api/customers/due-summary — dashboard "Total Due" stat: how much
+// udhaar is outstanding across every customer right now, and how many
+// customers it's spread across. Summed in SQL rather than pulled client-side
+// so this stays correct even past the 500-row cap on GET /customers.
+router.get('/due-summary', async (req, res) => {
+  const [agg, count] = await Promise.all([
+    prisma.customer.aggregate({ where: { totalDue: { gt: 0 } }, _sum: { totalDue: true } }),
+    prisma.customer.count({ where: { totalDue: { gt: 0 } } }),
+  ]);
+  res.json({ totalDue: round2(agg._sum.totalDue || 0), customersWithDue: count });
+});
+
+// GET /api/customers/top-due?limit=5 — dashboard widget, customers who owe
+// the most right now.
+router.get('/top-due', async (req, res) => {
+  const limit = Math.min(20, Math.max(1, Number(req.query.limit) || 5));
+  const customers = await prisma.customer.findMany({
+    where: { totalDue: { gt: 0 } },
+    orderBy: { totalDue: 'desc' },
+    take: limit,
+  });
+  res.json(customers);
+});
+
+// GET /api/customers/phone/:phone — POS lookup for loyalty
+router.get('/phone/:phone', async (req, res) => {
+  const customer = await prisma.customer.findUnique({ where: { phone: req.params.phone } });
+  if (!customer) return res.status(404).json({ error: 'Customer not found' });
+  res.json(customer);
+});
+
+// GET /api/customers/by-card/:uid — an NFC card/tag tap identifies the customer.
+router.get('/by-card/:uid', async (req, res) => {
+  const customer = await prisma.customer.findUnique({ where: { cardUid: String(req.params.uid).toUpperCase() } });
+  if (!customer) return res.status(404).json({ error: 'No customer linked to that card' });
+  res.json(customer);
+});
+
+// PUT /api/customers/:id/card — link (or unlink with null) an NFC card UID.
+router.put('/:id/card', requirePerm('customers'), async (req, res) => {
+  const id = Number(req.params.id);
+  const parsed = z.object({ cardUid: z.string().trim().regex(/^[0-9A-Fa-f:\-]{4,40}$/).nullable() }).safeParse(req.body);
+  if (!Number.isInteger(id) || !parsed.success) return res.status(400).json({ error: 'Invalid input' });
+  try {
+    const uid = parsed.data.cardUid ? parsed.data.cardUid.toUpperCase().replace(/[:\-]/g, '') : null;
+    res.json(await prisma.customer.update({ where: { id }, data: { cardUid: uid } }));
+  } catch (e) {
+    res.status(e.code === 'P2002' ? 409 : 404).json({ error: e.code === 'P2002' ? 'That card is linked to another customer' : 'Customer not found' });
+  }
+});
+
+// GET /api/customers/:id/portal-link — the customer's personal loyalty page.
+router.get('/:id/portal-link', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid id' });
+  const customer = await prisma.customer.findUnique({ where: { id } });
+  if (!customer) return res.status(404).json({ error: 'Customer not found' });
+  const origin = process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get('host')}`;
+  const url = `${origin.replace(/\/$/, '')}/me/${makePortalToken(id)}`;
+  res.json({ url, whatsappUrl: `https://wa.me/${customer.phone.replace(/\D/g, '')}?text=${encodeURIComponent(`Your loyalty & receipts page: ${url}`)}` });
+});
+
+router.post('/', requirePerm('customers'), async (req, res) => {
+  const parsed = customerSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Invalid input', details: parsed.error.flatten() });
+  }
+  const existing = await prisma.customer.findUnique({ where: { phone: parsed.data.phone } });
+  if (existing) return res.status(409).json({ error: 'A customer with that phone already exists', customer: existing });
+
+  const customer = await prisma.customer.create({ data: parsed.data });
+  res.status(201).json(customer);
+});
+
+const settleDueSchema = z.object({
+  amount: z.number().positive(),
+  note: z.string().trim().max(200).optional().or(z.literal('')),
+});
+
+// POST /api/customers/:id/settle-due — record a payment against a
+// customer's running due balance ("udhaar"). Kept as its own audit trail
+// (CustomerDuePayment) rather than just decrementing a number with no
+// history. Amount is capped at the current balance — can't "overpay" a due
+// into a negative number by mistake.
+router.post('/:id/settle-due', requirePerm('customers'), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid customer id' });
+  const parsed = settleDueSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Invalid input', details: parsed.error.flatten() });
+  }
+
+  try {
+    const customer = await prisma.$transaction(async (tx) => {
+      const existing = await tx.customer.findUnique({ where: { id } });
+      if (!existing) throw Object.assign(new Error('Customer not found'), { status: 404 });
+
+      const amount = Math.min(parsed.data.amount, existing.totalDue);
+      if (amount <= 0) throw Object.assign(new Error('This customer has no outstanding due'), { status: 400 });
+
+      await tx.customerDuePayment.create({
+        data: { customerId: id, amount, note: parsed.data.note || null },
+      });
+      // Compute + round in JS rather than a DB-side float `decrement`, so a
+      // fully-settled due lands on exactly 0 and can never leave sub-paise
+      // residue that keeps displaying as an uncleared balance.
+      const newTotalDue = round2(existing.totalDue - amount);
+      return tx.customer.update({ where: { id }, data: { totalDue: newTotalDue } });
+    });
+    res.json(customer);
+  } catch (err) {
+    const status = err.status || 500;
+    if (status === 500) console.error(err);
+    res.status(status).json({ error: err.message || 'Could not record payment' });
+  }
+});
+
+// GET /api/customers/:id/due-payments — settlement history for a customer
+router.get('/:id/due-payments', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid customer id' });
+  const payments = await prisma.customerDuePayment.findMany({
+    where: { customerId: id },
+    orderBy: { createdAt: 'desc' },
+  });
+  res.json(payments);
+});
+
+router.put('/:id', requirePerm('customers'), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid customer id' });
+  const parsed = customerSchema.partial().safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Invalid input', details: parsed.error.flatten() });
+  }
+  try {
+    const customer = await prisma.customer.update({ where: { id }, data: parsed.data });
+    res.json(customer);
+  } catch {
+    res.status(404).json({ error: 'Customer not found' });
+  }
+});
+
+module.exports = router;

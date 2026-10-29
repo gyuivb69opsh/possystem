@@ -1,0 +1,162 @@
+const express = require('express');
+const { z } = require('zod');
+const prisma = require('../lib/prisma');
+const { requireAuth, requireAdmin, requirePasswordConfirm, readSession } = require('../middleware/auth');
+const { CURRENCIES, symbolFor } = require('../lib/currency');
+const { saveSignature } = require('../lib/signatures');
+
+const router = express.Router();
+
+// Field validators with NO `.default()` — shared by both schemas below.
+// Zod's `.default()` fires whenever a key is absent, which is exactly
+// wrong for a partial PATCH-style update: `settingsSchema.partial()` would
+// still silently fill in every omitted field with its default, resetting
+// it in the database rather than leaving it untouched. (Confirmed via
+// `z.object({x: z.boolean().default(false)}).partial().safeParse({})` ->
+// `{x: false}` — the key is present with the default, not absent.)
+const fields = {
+  shopName: z.string().trim().min(1).max(120),
+  legalName: z.string().trim().max(160).optional().or(z.literal('')),
+  address1: z.string().trim().min(1).max(200),
+  address2: z.string().trim().max(200).optional().or(z.literal('')),
+  city: z.string().trim().max(80).optional().or(z.literal('')),
+  state: z.string().trim().max(80).optional().or(z.literal('')),
+  pincode: z.string().trim().max(10).optional().or(z.literal('')),
+  phone: z.string().trim().max(30).optional().or(z.literal('')),
+  email: z.string().trim().max(200).optional().or(z.literal('')),
+  currencyCode: z.enum(Object.keys(CURRENCIES)),
+  gstEnabled: z.boolean(),
+  gstNumber: z.string().trim().max(20).optional().or(z.literal('')),
+  panNumber: z.string().trim().max(10).optional().or(z.literal('')),
+  defaultTaxRate: z.number().min(0).max(100),
+  loyaltyEnabled: z.boolean(),
+  pointsPerUnit: z.number().min(0).max(1000),
+  pointValue: z.number().min(0).max(10000),
+  receiptHeader: z.string().trim().max(200).optional().or(z.literal('')),
+  receiptFooter: z.string().trim().max(200),
+  showGst: z.boolean(),
+  autoPrintReceipt: z.boolean(),
+  usbPrinterWidth: z.union([z.literal(58), z.literal(80)]),
+  autoPrintMethod: z.enum(['browser', 'usb']),
+  lowStockAlert: z.number().int().min(0).max(100000),
+  allowNegativeStock: z.boolean(),
+  signatoryName: z.string().trim().max(100).optional().or(z.literal('')),
+  invoiceLayout: z.enum(['receipt', 'a4']),
+  // UPI VPA, e.g. shop@okhdfcbank — letters/digits/.-_ then @handle.
+  upiId: z.string().trim().max(100).regex(/^[\w.\-]{2,64}@[A-Za-z][A-Za-z0-9.\-]{1,40}$/, 'Enter a valid UPI id like shop@bank').optional().or(z.literal('')),
+  termsText: z.string().trim().max(600).optional().or(z.literal('')),
+  cashDrawer: z.boolean(),
+  serialTracking: z.boolean(),
+};
+
+// POST (onboarding, create-once): every field required or defaulted.
+const createSchema = z.object({
+  ...fields,
+  currencyCode: fields.currencyCode.default('INR'),
+  gstEnabled: fields.gstEnabled.default(false),
+  defaultTaxRate: fields.defaultTaxRate.default(0),
+  loyaltyEnabled: fields.loyaltyEnabled.default(false),
+  pointsPerUnit: fields.pointsPerUnit.default(0),
+  pointValue: fields.pointValue.default(0),
+  receiptFooter: fields.receiptFooter.default('Thank You! Visit Again.'),
+  showGst: fields.showGst.default(true),
+  autoPrintReceipt: fields.autoPrintReceipt.default(false),
+  usbPrinterWidth: fields.usbPrinterWidth.default(80),
+  autoPrintMethod: fields.autoPrintMethod.default('browser'),
+  lowStockAlert: fields.lowStockAlert.default(5),
+  allowNegativeStock: fields.allowNegativeStock.default(false),
+  invoiceLayout: fields.invoiceLayout.default('receipt'),
+  cashDrawer: fields.cashDrawer.default(false),
+  serialTracking: fields.serialTracking.default(false),
+});
+
+// PUT (partial update): no defaults anywhere, so an omitted key is simply
+// absent from parsed.data and never touches that column.
+const updateSchema = z.object(fields).partial();
+
+// Derive the currency symbol from the code so the two never drift apart.
+function withSymbol(data) {
+  return { ...data, currencySymbol: symbolFor(data.currencyCode) };
+}
+
+// GET /api/settings/currencies — currency options for the settings UI
+router.get('/currencies', (req, res) => {
+  res.json(CURRENCIES);
+});
+
+// GET /api/settings — branding/receipt config is read before login (login and
+// onboarding screens), so this stays public. But the full row carries tax
+// identifiers (GSTIN, PAN) that anonymous callers on the shop LAN have no
+// reason to see, so those are stripped unless the request is authenticated.
+// Columns that hold encrypted third-party credentials or sync secrets are
+// NEVER sent to any client — not even an admin's browser needs them back
+// (the Settings tabs show "stored" instead).
+const SECRET_COLUMNS = ['terminalConfigEnc', 'smtpConfigEnc', 'syncSecretEnc', 'vfCertEnc', 'vfCertPassEnc'];
+// What an anonymous caller (login / onboarding / QR-menu screens) may see.
+const PUBLIC_COLUMNS = ['id', 'shopName', 'legalName', 'address1', 'address2', 'city', 'state', 'phone', 'currencyCode', 'currencySymbol', 'receiptFooter', 'loyaltyEnabled', 'invoiceLayout', 'gstEnabled', 'showGst'];
+
+function clientView(settings, authed) {
+  if (!authed) return Object.fromEntries(PUBLIC_COLUMNS.map((k) => [k, settings[k]]));
+  const out = { ...settings };
+  for (const k of SECRET_COLUMNS) delete out[k];
+  return out;
+}
+
+router.get('/', async (req, res) => {
+  const settings = await prisma.shopSettings.findFirst();
+  if (!settings) return res.json(null);
+  res.json(clientView(settings, Boolean(readSession(req))));
+});
+
+// POST /api/settings — onboarding step 2, only once
+router.post('/', async (req, res) => {
+  const existing = await prisma.shopSettings.findFirst();
+  if (existing) {
+    return res.status(403).json({ error: 'Shop settings already configured; use PUT /api/settings' });
+  }
+  const parsed = createSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Invalid input', details: parsed.error.flatten() });
+  }
+  const created = await prisma.shopSettings.create({ data: withSymbol(parsed.data) });
+  res.status(201).json(clientView(created, true));
+});
+
+// PUT /api/settings — admins edit company/currency/tax/loyalty/receipt config
+router.put('/', requireAuth, requireAdmin, requirePasswordConfirm, async (req, res) => {
+  const existing = await prisma.shopSettings.findFirst();
+  if (!existing) return res.status(404).json({ error: 'No shop settings to update' });
+
+  const parsed = updateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Invalid input', details: parsed.error.flatten() });
+  }
+  const data = { ...parsed.data };
+  if (data.currencyCode) data.currencySymbol = symbolFor(data.currencyCode);
+
+  const updated = await prisma.shopSettings.update({ where: { id: existing.id }, data });
+  res.json(clientView(updated, true));
+});
+
+// PUT /api/settings/signature — upload the authorised signatory's signature
+// (PNG/JPEG data URL, max 300 KB). Printed on A4 invoices and receipts.
+router.put('/signature', requireAuth, requireAdmin, requirePasswordConfirm, async (req, res) => {
+  const existing = await prisma.shopSettings.findFirst();
+  if (!existing) return res.status(404).json({ error: 'No shop settings' });
+  try {
+    const file = saveSignature(req.body?.image);
+    const updated = await prisma.shopSettings.update({ where: { id: existing.id }, data: { signatureFile: file } });
+    res.json({ signatureFile: updated.signatureFile });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.delete('/signature', requireAuth, requireAdmin, requirePasswordConfirm, async (req, res) => {
+  const existing = await prisma.shopSettings.findFirst();
+  if (!existing) return res.status(404).json({ error: 'No shop settings' });
+  await prisma.shopSettings.update({ where: { id: existing.id }, data: { signatureFile: null } });
+  res.status(204).end();
+});
+
+module.exports = router;

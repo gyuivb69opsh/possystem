@@ -1,0 +1,256 @@
+// Renders a receipt as a PDF buffer with pdfkit — a pure-JS PDF generator
+// (no native bindings, no shell-out), so this ships with zero extra CVEs.
+// Used for the "Download PDF" button; the same data also feeds the printable
+// HTML view (see receipt.js) that drives the browser print dialog.
+const PDFDocument = require('pdfkit');
+const { readSignature } = require('./signatures');
+const { drawQrPdf } = require('./verifactu/qr');
+
+function money(sym, n) {
+  return `${sym} ${Number(n).toFixed(2)}`;
+}
+
+// A drawn horizontal rule spanning the content width. Earlier this used
+// repeated '-'/'=' characters via doc.text(), but at this page width that
+// wraps onto multiple lines instead of drawing a single separator.
+function rule(doc, { dashed = false } = {}) {
+  const left = doc.page.margins.left;
+  const right = doc.page.width - doc.page.margins.right;
+  const y = doc.y + 2;
+  doc.save();
+  if (dashed) doc.dash(2, { space: 2 });
+  doc.lineWidth(dashed ? 0.75 : 1.25).moveTo(left, y).lineTo(right, y).stroke('#000');
+  doc.restore();
+  doc.y = y + 6;
+}
+
+// A fixed page height wastes real thermal paper: pdfkit still emits the
+// full page regardless of how little content is on it, and continuous-roll
+// printers cut at the page boundary. Estimate a page height tight to this
+// specific invoice's content instead of using one flat size for every
+// receipt. Deliberately generous — if it still undershoots, pdfkit starts a
+// second page rather than clipping anything, but a bare-minimum single
+// wrapped line spilling onto an otherwise-blank second page is exactly the
+// waste this is meant to prevent, so wrapping text (long item names, a
+// multi-line custom footer) is measured properly rather than flat-rated.
+const CHARS_PER_LINE_NAME = 12; // ~colName width (0.28 * ~195pt) at 8pt Helvetica
+const CHARS_PER_LINE_FULL = 30; // full receipt width at 8pt Helvetica, centered text
+
+function wrappedLines(text, charsPerLine) {
+  return String(text)
+    .split('\n')
+    .reduce((total, line) => total + Math.max(1, Math.ceil(line.length / charsPerLine)), 0);
+}
+
+function estimateHeight({ shop, invoice }) {
+  const es = !!shop.vfEnabled;
+  let h = 40; // top/bottom margins + rounding buffer
+  h += 16; // shop name
+  if (shop.legalName) h += 10;
+  if ([shop.address1, shop.address2].filter(Boolean).join(', ')) h += 10;
+  if ([shop.city, shop.state].filter(Boolean).join(', ')) h += 10;
+  if (shop.phone) h += 10;
+  if ((es && shop.vfNif) || (shop.gstEnabled && shop.gstNumber)) h += 10;
+  h += 12; // spacer + rule
+  h += 32; // date/bill/customer, 3 lines
+  h += 8; // rule
+  h += 20; // table header row
+  for (const it of invoice.items) {
+    h += wrappedLines(it.name, CHARS_PER_LINE_NAME) * 10 + 4;
+    if (shop.gstEnabled && shop.showGst && it.taxRate > 0) h += 9;
+    if (it.serials?.length) h += it.serials.length * 9 + 2;
+  }
+  if (shop.signatureFile) h += 44;
+  h += 8; // rule
+  h += 13; // subtotal
+  if (invoice.discountAmount > 0) h += 13;
+  if (shop.gstEnabled && invoice.taxAmount > 0) h += es ? 13 : 26; // IVA, or CGST + SGST
+  if (invoice.verifactu) h += 150; // Spain VERI*FACTU: invoice number, heading, 35 mm QR, legends
+  if (invoice.loyaltyDiscount > 0) h += 13;
+  if (invoice.returnValue > 0) h += 13;
+  if (invoice.creditApplied > 0) h += 13;
+  // Refund-outcome bill: "Old Due Cleared" (if any) sits above the closing
+  // rule, no separate "Paid" section below it.
+  if (invoice.refundValue > 0 && invoice.previousDuePaid > 0) h += 13;
+  h += 8 + 16; // rule + grand/net-payable/refund line
+  if (invoice.refundValue === 0) {
+    h += 8 + 13; // rule + paid
+    if (invoice.previousDuePaid > 0) h += 26; // old due cleared + total collected
+    if (invoice.changeDue > 0) h += 13;
+    if (invoice.dueAmount > 0) h += 13;
+  }
+  if (shop.loyaltyEnabled && invoice.pointsEarned > 0) h += 14;
+  h += 12 + 8; // spacer + rule
+  h += wrappedLines(shop.receiptFooter || 'Thank You! Visit Again.', CHARS_PER_LINE_FULL) * 10;
+  return Math.max(300, Math.ceil(h) + 40);
+}
+
+function buildReceiptPdf({ shop, invoice }) {
+  const es = !!shop.vfEnabled; // Spain: IVA wording and the NIF instead of India's GST
+  return new Promise((resolve, reject) => {
+    const height = estimateHeight({ shop, invoice });
+    const doc = new PDFDocument({ size: [227, height], margin: 16 }); // ~80mm wide, height fit to this receipt
+    const chunks = [];
+    doc.on('data', (c) => chunks.push(c));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+
+    const sym = shop.currencySymbol || 'Rs.';
+    const width = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+
+    doc.font('Helvetica-Bold').fontSize(13).text(shop.shopName, { align: 'center' });
+    doc.font('Helvetica').fontSize(8);
+    if (shop.legalName) doc.text(shop.legalName, { align: 'center' });
+    const addr = [shop.address1, shop.address2].filter(Boolean).join(', ');
+    if (addr) doc.text(addr, { align: 'center' });
+    const cityState = [shop.city, shop.state].filter(Boolean).join(', ');
+    if (cityState) doc.text(cityState, { align: 'center' });
+    if (shop.phone) doc.text(`Ph: ${shop.phone}`, { align: 'center' });
+    if (es && shop.vfNif) doc.text(`NIF: ${shop.vfNif}`, { align: 'center' });
+    else if (shop.gstEnabled && shop.gstNumber) doc.text(`GSTIN: ${shop.gstNumber}`, { align: 'center' });
+
+    doc.moveDown(0.5);
+    rule(doc, { dashed: true });
+    const date = new Date(invoice.createdAt || Date.now());
+    doc.text(`${date.toLocaleString()}`);
+    doc.text(`Bill: #${invoice.invoiceNumber}`);
+    doc.text(`Cust: ${invoice.customerName || 'Walk-in Customer'}${invoice.customerPhone ? ` · ${invoice.customerPhone}` : ''}`);
+    rule(doc, { dashed: true });
+
+    const colName = width * 0.28;
+    const colQty = width * 0.22; // wide enough for "<qty> <unit>", e.g. "3 KGS"
+    const colRate = width * 0.25;
+    const colAmt = width * 0.25;
+    // Right-aligned columns sit flush against each other's shared boundary,
+    // so a value that nearly fills its column touches the next one with no
+    // gap — shave a few points off each non-final right-aligned column's
+    // text-box width (not its position) to leave visible breathing room.
+    const GAP = 4;
+    let y = doc.y;
+    doc.font('Helvetica-Bold').fontSize(7.5);
+    doc.text('Item', doc.page.margins.left, y, { width: colName });
+    doc.text('Qty', doc.page.margins.left + colName, y, { width: colQty - GAP, align: 'right' });
+    doc.text('Rate', doc.page.margins.left + colName + colQty, y, { width: colRate - GAP, align: 'right' });
+    doc.text('Amount', doc.page.margins.left + colName + colQty + colRate, y, { width: colAmt, align: 'right' });
+    doc.moveDown(0.3);
+    doc.font('Helvetica').fontSize(8);
+    rule(doc, { dashed: true });
+
+    for (const it of invoice.items) {
+      y = doc.y;
+      const base = it.price * it.quantity;
+      doc.text(it.name, doc.page.margins.left, y, { width: colName });
+      const rowHeight = doc.heightOfString(it.name, { width: colName });
+      doc.text(it.unit ? `${it.quantity} ${it.unit}` : String(it.quantity), doc.page.margins.left + colName, y, {
+        width: colQty - GAP,
+        align: 'right',
+      });
+      doc.text(money(sym, it.price), doc.page.margins.left + colName + colQty, y, { width: colRate - GAP, align: 'right' });
+      doc.text(money(sym, base), doc.page.margins.left + colName + colQty + colRate, y, { width: colAmt, align: 'right' });
+      doc.y = y + Math.max(rowHeight, 11);
+      if (shop.gstEnabled && shop.showGst && it.taxRate > 0) {
+        doc.fontSize(6.5).fillColor('#666').text(`  ${es ? 'IVA' : 'GST'} @ ${it.taxRate}%`);
+        doc.fontSize(8).fillColor('#000');
+      }
+      for (const s of it.serials || []) {
+        doc.fontSize(6.5).fillColor('#444').text(`  S/N ${s.serial}`);
+      }
+      doc.fontSize(8).fillColor('#000');
+    }
+
+    rule(doc, { dashed: true });
+
+    const totalLine = (label, value, bold = false) => {
+      const yy = doc.y;
+      doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(bold ? 10 : 8.5);
+      doc.text(label, doc.page.margins.left, yy, { width: width * 0.6 });
+      doc.text(value, doc.page.margins.left + width * 0.6, yy, { width: width * 0.4, align: 'right' });
+      doc.font('Helvetica').fontSize(8);
+    };
+
+    totalLine('Subtotal', money(sym, invoice.subtotal));
+    if (invoice.discountAmount > 0) {
+      const label = invoice.discountType === 'percent' ? `Discount (${invoice.discountValue}%)` : 'Discount';
+      totalLine(label, `- ${money(sym, invoice.discountAmount)}`);
+    }
+    if (shop.gstEnabled && invoice.taxAmount > 0) {
+      // Prices are MRP — GST-inclusive by law — so this is a breakup of
+      // tax already inside the total, not an addition to it.
+      if (es) {
+        totalLine('IVA (incl.)', money(sym, invoice.taxAmount));
+      } else {
+        const half = Math.round((invoice.taxAmount / 2 + Number.EPSILON) * 100) / 100;
+        totalLine('CGST (incl.)', money(sym, half));
+        totalLine('SGST (incl.)', money(sym, invoice.taxAmount - half));
+      }
+    }
+    if (invoice.loyaltyDiscount > 0) {
+      totalLine(`Loyalty (${invoice.pointsRedeemed} pts)`, `- ${money(sym, invoice.loyaltyDiscount)}`);
+    }
+    if (invoice.returnValue > 0) totalLine('Returns', `- ${money(sym, invoice.returnValue)}`);
+    if (invoice.creditApplied > 0) totalLine('Store credit used', `- ${money(sym, invoice.creditApplied)}`);
+
+    const payable = Math.max(0, Math.round((invoice.totalAmount - invoice.returnValue - invoice.creditApplied) * 100) / 100);
+    const hasRefund = invoice.refundValue > 0;
+    // Same netting story as receipt.js: on a refund-outcome bill, show where
+    // an old due went before the final refund line, or the receipt reads as
+    // "Returns -500 / REFUND 200" with 300 unaccounted for.
+    if (hasRefund && invoice.previousDuePaid > 0) {
+      totalLine('Old Due Cleared', `- ${money(sym, invoice.previousDuePaid)}`);
+    }
+    rule(doc);
+    if (hasRefund) {
+      totalLine(`REFUND (${invoice.refundMode === 'CREDIT' ? 'store credit' : 'cash'})`, money(sym, invoice.refundValue), true);
+    } else {
+      const grandLabel = invoice.returnValue > 0 || invoice.creditApplied > 0 ? 'NET PAYABLE' : 'GRAND TOTAL';
+      totalLine(grandLabel, money(sym, payable), true);
+      rule(doc);
+      totalLine(`Paid (${invoice.paymentMethod})`, money(sym, invoice.amountPaid));
+      if (invoice.previousDuePaid > 0) {
+        totalLine('Old Due Cleared', money(sym, invoice.previousDuePaid));
+        totalLine('Total Collected', money(sym, invoice.amountPaid + invoice.previousDuePaid), true);
+      }
+      if (invoice.changeDue > 0) totalLine('Change', money(sym, invoice.changeDue));
+      if (invoice.dueAmount > 0) totalLine('Balance Due', money(sym, invoice.dueAmount));
+    }
+
+    if (shop.loyaltyEnabled && invoice.pointsEarned > 0) {
+      doc.moveDown(0.3);
+      doc.fontSize(8).text(`You earned ${invoice.pointsEarned} loyalty points!`, { align: 'center' });
+    }
+
+    if (invoice.verifactu) {
+      const vf = invoice.verifactu;
+      doc.moveDown(0.5);
+      rule(doc, { dashed: true });
+      doc.font('Helvetica-Bold').fontSize(8).text(`Factura simplificada ${vf.invoiceNumber}`, { align: 'center' });
+      doc.font('Helvetica').text(vf.heading, { align: 'center' });
+      const size = 99; // 35 mm, inside AEAT's 30-40 mm
+      drawQrPdf(doc, vf.url, doc.page.margins.left + (width - size) / 2, doc.y + 2, size);
+      doc.y += size + 6;
+      doc.text(vf.legend, { align: 'center' });
+      doc.font('Helvetica-Bold').text(vf.short, { align: 'center' });
+      doc.font('Helvetica');
+    }
+
+    doc.moveDown(0.5);
+    rule(doc, { dashed: true });
+    doc.fontSize(8).text(shop.receiptFooter || 'Thank You! Visit Again.', { align: 'center' });
+
+    const sig = readSignature(shop.signatureFile);
+    if (sig) {
+      doc.moveDown(0.4);
+      try {
+        doc.image(sig, doc.page.margins.left + width / 2 - 35, doc.y, { fit: [70, 30] });
+        doc.y += 32;
+        doc.fontSize(6.5).fillColor('#666').text('Authorised signatory', { align: 'center' });
+      } catch {
+        // unreadable image — skip rather than fail the whole receipt
+      }
+    }
+
+    doc.end();
+  });
+}
+
+module.exports = { buildReceiptPdf };
